@@ -1,29 +1,27 @@
 (() => {
-  // ===== Konfiguracja endpointów =====
   const base = JSON.parse(document.getElementById('app').dataset.endpoints).base;
   const ep = {
     search: `${base}/companies-search`,
     owned: `${base}/company-products`,
-    overview: `${base}/company-overview`, // NOWE: czyta właściwości firmy (aktywne_* + *_next_billing_date)
+    overview: `${base}/company-overview`,
     catalog: `${base}/catalog`,
     createQuote: `${base}/create-quote`,
     getQuote: `${base}/get-quote`
   };
 
-  // ===== Stan aplikacji =====
   const state = {
     company: null,
     catalog: null,
-    ownedMain: new Set(), // unia: z właściwości firmy + detekcja po dealach
-    overview: null,       // pełny obiekt z company-overview (daty, usługi)
+    ownedMain: new Set(),
+    overview: null,
     selection: { main: new Map(), services: new Map() },
-    discountMode: 'TOTAL_AFTER_UPSELL', // liczenie rabatu 2/3/4 (posiadane + nowe)
+    discountMode: 'TOTAL_AFTER_UPSELL',
     lastQuote: null
   };
 
   const $app = document.querySelector('#app');
 
-  // ===== Utils =====
+  // === utils ===
   function h(tag, attrs = {}, ...children) {
     const n = document.createElement(tag);
     for (const [k, v] of Object.entries(attrs)) {
@@ -54,7 +52,7 @@
     return d.toLocaleDateString('pl-PL');
   }
 
-  // ===== Widok 1: wybór firmy =====
+  // === wybór firmy ===
   function viewCompanyPicker() {
     const input = h('input', { class: 'inp', placeholder: 'Szukaj firmy (min 2 litery)' });
     const list = h('div', { class: 'list' });
@@ -82,7 +80,6 @@
     $app.append(h('div', { class: 'view' }, h('h2', {}, 'Wybierz firmę'), input, list));
   }
 
-  // ===== Po wyborze firmy: pobierz overview + katalog + (opcjonalnie) posiadane z dealów =====
   async function pickCompany(c) {
     state.company = c;
     try {
@@ -106,12 +103,12 @@
     }
   }
 
-  // ===== Widok 2: produkty + usługi + nowa sekcja "Obecnie posiadane" =====
+  // === produkty + usługi + obecne ===
   function viewProductPicker() {
     const wrap = h('div', { class: 'view' });
     wrap.appendChild(h('h2', {}, `Firma: ${state.company.properties.name}`));
 
-    // --- NOWA SEKCJA: Obecnie posiadane (z datami w ms) ---
+    // --- obecnie posiadane ---
     if (state.overview) {
       const sec = h('div', { class: 'owned' });
       sec.appendChild(h('h3', {}, 'Obecnie posiadane'));
@@ -121,10 +118,11 @@
 
       (state.overview.owned?.main || []).forEach(item => {
         const title = labelMap[item.key] || item.key;
+        const tier = item.tier ? ` · Tier: ${item.tier}` : '';
         const dateTxt = fmtDateFromMsOrIso(item.nextBillingDate);
         list.appendChild(
           h('div', { class: 'owned-row' },
-            h('span', { class: 'owned-name' }, title),
+            h('span', { class: 'owned-name' }, `${title}${tier}`),
             h('span', { class: 'owned-date' }, `Nast. rozliczenie: ${dateTxt}`)
           )
         );
@@ -142,7 +140,7 @@
       sec.appendChild(list);
       wrap.appendChild(sec);
     }
-    // --- /NOWA SEKCJA ---
+    // --- /obecnie posiadane ---
 
     // Produkty główne
     const mainGrid = h('div', { class: 'grid' });
@@ -249,6 +247,5 @@
     }
   }
 
-  // start
   viewCompanyPicker();
 })();
