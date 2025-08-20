@@ -1,5 +1,5 @@
 {
   "name": "hs-offer-calc-backend",
   "private": true,
-  "type": "module"
+  "type": "commonjs"
 }
