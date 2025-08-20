@@ -1,8 +1,10 @@
-import { withCORS } from './_lib/cors.js';
-import { hsFetch } from './_lib/hs.js';
+const { withCORS } = require('./_lib/cors');
+const { hsFetch } = require('./_lib/hs');
 
-export default withCORS(async function handler(req, res) {
+module.exports = withCORS(async (req, res) => {
+  if (req.method === 'OPTIONS') return res.status(204).end();
   if (req.method !== 'GET') return res.status(405).json({ error: 'Method not allowed' });
+
   const q = String(req.query.query || '').trim();
   if (q.length < 2) return res.status(200).json([]);
 
