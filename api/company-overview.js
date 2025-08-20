@@ -5,7 +5,7 @@ const { hsFetch } = require('./_lib/hs');
 // mapowanie: którą datę pokazać dla jakiego produktu głównego
 const NEXT_BILLING_PROPS = {
   WPF: 'wpf_next_billing_date',
-  BUDZET: 'best_next_billing_date', // jeśli u Ciebie jest np. budzet_next_billing_date → podmień tutaj
+  BUDZET: 'best_next_billing_date', // jeśli u Ciebie jest np. budzet_next_billing_date → podmień
   UMOWY: 'umowy_next_billing_date',
   SWB: 'swb_next_billing_date'
 };
@@ -13,6 +13,7 @@ const NEXT_BILLING_PROPS = {
 // normalizacja kluczy produktów głównych
 function normKey(s = '') {
   return String(s).toUpperCase()
+    .replace('EPUBLINK ', '')             // np. "EPUBLINK WPF" → "WPF"
     .replace('BUDŻET', 'BUDZET')
     .replace('Ł','L').replace('Ś','S').replace('Ó','O')
     .replace('Ż','Z').replace('Ź','Z').replace('Ć','C')
@@ -20,7 +21,17 @@ function normKey(s = '') {
     .trim();
 }
 
-// normalizacja nazwy tier
+// z tokenu/etykiety zrób nasz klucz WPF/BUDZET/UMOWY/SWB
+function toMainKey(tok = '') {
+  const t = normKey(tok);
+  if (t.includes('WPF')) return 'WPF';
+  if (t.includes('UMOW')) return 'UMOWY';
+  if (t.includes('SWB')) return 'SWB';
+  if (t.includes('BUDZ')) return 'BUDZET';
+  return t; // fallback – pokaż surowe, jeśli nie rozpoznaliśmy
+}
+
+// normalizacja Tiera (firma-level)
 function normTier(t = '') {
   const x = String(t).trim().toUpperCase();
   if (!x) return null;
@@ -28,50 +39,15 @@ function normTier(t = '') {
   if (['PLUS','PL'].includes(x)) return 'Plus';
   if (['PRO','PR'].includes(x)) return 'Pro';
   if (['MAX','M'].includes(x)) return 'Max';
-  return t; // zostaw surowe, jeśli inny wariant
+  return t;
 }
 
-// parsowanie CSV (np. "WPF, BUDZET")
-function parseCsv(val) {
+// parsowanie listy: akceptuj "," i ";" jako separatory
+function parseList(val) {
   return String(val || '')
-    .split(',')
+    .split(/[;,]/)
     .map(s => s.trim())
     .filter(Boolean);
-}
-
-// parsowanie subscription_tier z róznych formatów:
-// 1) JSON: {"WPF":"Plus","BUDZET":"Pro"}
-// 2) "WPF:Plus; BUDZET:Pro; SWB:Solo"
-// 3) "WPF,Plus;BUDZET,Pro"
-function parseTierMap(raw) {
-  const out = {};
-  if (!raw) return out;
-  const str = String(raw).trim();
-  // JSON
-  if (str.startsWith('{')) {
-    try {
-      const obj = JSON.parse(str);
-      for (const [k,v] of Object.entries(obj)) out[normKey(k)] = normTier(v);
-      return out;
-    } catch {}
-  }
-  // rozdzielone średnikami
-  const parts = str.split(';').map(s => s.trim()).filter(Boolean);
-  parts.forEach(p => {
-    // KEY:TIER
-    if (p.includes(':')) {
-      const [k,v] = p.split(':');
-      out[normKey(k)] = normTier(v);
-      return;
-    }
-    // KEY,TIER
-    if (p.includes(',')) {
-      const [k,v] = p.split(',');
-      out[normKey(k)] = normTier(v);
-      return;
-    }
-  });
-  return out;
 }
 
 module.exports = withCORS(async (req, res) => {
@@ -82,45 +58,32 @@ module.exports = withCORS(async (req, res) => {
     const companyId = req.query.companyId;
     if (!companyId) return res.status(400).json({ error: 'companyId required' });
 
-    // pobierz firmę z potrzebnymi polami
     const properties = [
       'name',
       'aktywne_produkty_glowne',
       'aktywne_uslugi_dodatkowe',
-      'subscription_tier', // <-- TUTAJ czytamy tier
-      'wpf_next_billing_date',
-      'swb_next_billing_date',
-      'best_next_billing_date',
-      'umowy_next_billing_date'
+      'subscription_tier', // tier na całej firmie
+      'wpf_next_billing_date','swb_next_billing_date','best_next_billing_date','umowy_next_billing_date'
     ];
     const c = await hsFetch(`/crm/v3/objects/companies/${companyId}?properties=${encodeURIComponent(properties.join(','))}`);
     const p = c.properties || {};
 
-    const ownedMainRaw = parseCsv(p.aktywne_produkty_glowne);
-    const ownedServicesRaw = parseCsv(p.aktywne_uslugi_dodatkowe);
-    const ownedMain = [...new Set(ownedMainRaw.map(normKey))];
-    const ownedServices = [...new Set(ownedServicesRaw.map(normKey))];
+    const ownedMain = [...new Set(parseList(p.aktywne_produkty_glowne).map(toMainKey))];
+    const ownedServices = [...new Set(parseList(p.aktywne_uslugi_dodatkowe).map(normKey))];
 
-    // map tierów
-    const tierMap = parseTierMap(p.subscription_tier);
+    const companyTier = normTier(p.subscription_tier);
 
-    // zbuduj obiekty z datami i tierem (daty: ISO lub ms → front to sformatuje)
-    const mainWithBilling = ownedMain.map(key => {
-      const dateProp = NEXT_BILLING_PROPS[key];
-      const nextBillingDate = dateProp ? (p[dateProp] || null) : null;
-      const tier = tierMap[key] || null;
-      return { key, nextBillingDate, tier };
-    });
+    const mainWithBilling = ownedMain.map(key => ({
+      key,
+      nextBillingDate: NEXT_BILLING_PROPS[key] ? (p[NEXT_BILLING_PROPS[key]] || null) : null,
+      tier: companyTier || null
+    }));
 
     return res.status(200).json({
-      company: { id: c.id, name: p.name || '' },
-      owned: {
-        main: mainWithBilling, // [{ key, nextBillingDate, tier }]
-        services: ownedServices
-      }
+      company: { id: c.id, name: p.name || '', tier: companyTier || null },
+      owned: { main: mainWithBilling, services: ownedServices }
     });
   } catch (e) {
-    // zawsze jasny JSON zamiast "nagiego" 500
     return res.status(500).json({ error: 'company-overview failed', detail: String(e && e.message || e) });
   }
 });
