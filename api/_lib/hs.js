@@ -1,6 +1,6 @@
 const HS_BASE = 'https://api.hubapi.com';
 
-export async function hsFetch(path, { method = 'GET', body, headers = {} } = {}) {
+async function hsFetch(path, { method = 'GET', body, headers = {} } = {}, attempt = 1) {
   const res = await fetch(`${HS_BASE}${path}`, {
     method,
     headers: {
@@ -10,20 +10,21 @@ export async function hsFetch(path, { method = 'GET', body, headers = {} } = {})
     },
     body: body ? JSON.stringify(body) : undefined
   });
+
+  if (res.status === 429 || (res.status >= 500 && res.status < 600)) {
+    if (attempt <= 5) {
+      const retryAfter = Number(res.headers.get('Retry-After')) || Math.min(2 ** attempt, 10);
+      await new Promise(r => setTimeout(r, retryAfter * 1000));
+      return hsFetch(path, { method, body, headers }, attempt + 1);
+    }
+  }
+
   if (!res.ok) {
     const txt = await res.text();
     throw new Error(`${path} → ${res.status} ${txt}`);
   }
+
   return res.json();
 }
 
-export function parseBody(req) {
-  return new Promise((resolve, reject) => {
-    let data = '';
-    req.on('data', chunk => (data += chunk));
-    req.on('end', () => {
-      try { resolve(data ? JSON.parse(data) : {}); } catch (e) { reject(e); }
-    });
-    req.on('error', reject);
-  });
-}
+module.exports = { hsFetch };
