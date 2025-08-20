@@ -1,19 +1,23 @@
-import { withCORS } from './_lib/cors.js';
-import { hsFetch } from './_lib/hs.js';
+const { withCORS } = require('./_lib/cors');
+const { hsFetch } = require('./_lib/hs');
 
-export default withCORS(async function handler(req, res) {
+module.exports = withCORS(async (req, res) => {
+  if (req.method === 'OPTIONS') return res.status(204).end();
   if (req.method !== 'GET') return res.status(405).json({ error: 'Method not allowed' });
-  const { quoteId } = req.query;
+
+  const quoteId = req.query.quoteId;
   if (!quoteId) return res.status(400).json({ error: 'quoteId required' });
 
   const quote = await hsFetch(`/crm/v3/objects/quotes/${quoteId}`);
+
   const liAssoc = await hsFetch(`/crm/v4/objects/quotes/${quoteId}/associations/line_items`);
   const liIds = (liAssoc.results || []).map(x => x.toObjectId || (x.to && x.to.id)).filter(Boolean);
+
   let items = [];
   if (liIds.length) {
     const liBatch = await hsFetch('/crm/v3/objects/line_items/batch/read', {
       method: 'POST',
-      body: { inputs: liIds.map(id => ({ id })), properties: ['name','quantity','price','amount','hs_product_id'] }
+      body: { inputs: liIds.map(id => ({ id })), properties: ['name', 'quantity', 'price', 'amount', 'hs_product_id'] }
     });
     items = (liBatch.results || []).map(r => ({
       id: r.id,
