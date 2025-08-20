@@ -1,7 +1,16 @@
-{% set css = require_css(filemanager_file_url(id=YOUR_STYLES_FILE_ID)) %}
-{% set js = require_js(filemanager_file_url(id=YOUR_APPJS_FILE_ID)) %}
+<!-- ====== KALKULATOR OFERT – BLOK DO WKLEJENIA W HUBSPOT ====== -->
+
+<!-- 1) CSS z File Managera (PODMIEŃ URL) -->
+<link rel="stylesheet" href="https://f.hubspotusercontentXX.net/hubfs/XXXXXXX/styles.css">
 
 <div class="calc-wrap">
   <h1>Kalkulator i generator ofert</h1>
-  <div id="app" data-endpoints='{"base":"https://<twoj-projekt>.vercel.app/api"}'></div>
+
+  <!-- 2) Endpointy API na Vercel (PODMIEŃ URL do swojego projektu) -->
+  <div id="app" data-endpoints='{"base":"https://twoj-projekt.vercel.app/api"}'></div>
 </div>
+
+<!-- 3) JS z File Managera (PODMIEŃ URL) -->
+<script src="https://f.hubspotusercontentXX.net/hubfs/XXXXXXX/app.js"></script>
+
+<!-- ====== /KONIEC BLOKU ====== -->
