@@ -1,6 +1,7 @@
-{% set css = require_css(get_asset_url("/calculator/assets/styles.css")) %}
-{% set js = require_js(get_asset_url("/calculator/assets/app.js")) %}
+{% set css = require_css(filemanager_file_url(id=YOUR_STYLES_FILE_ID)) %}
+{% set js = require_js(filemanager_file_url(id=YOUR_APPJS_FILE_ID)) %}
+
 <div class="calc-wrap">
-<h1>Kalkulator i generator ofert</h1>
-<div id="app" data-endpoints='{"base":"https://twoj-projekt.vercel.app/api"}'></div>
+  <h1>Kalkulator i generator ofert</h1>
+  <div id="app" data-endpoints='{"base":"https://<twoj-projekt>.vercel.app/api"}'></div>
 </div>
