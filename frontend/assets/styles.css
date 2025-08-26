@@ -1,34 +1,133 @@
-/* Layout */
-.calc-wrap { max-width: 1100px; margin: 2rem auto; padding: 1rem; }
-.view { margin: 1rem 0; }
+/* === Brand tokens (łatwo podmienisz pod identyfikację wizualną) === */
+:root{
+  --brand: #0d1b4c;          /* granat / primary */
+  --brand-2: #0ea5e9;        /* akcent niebieski */
+  --ink: #0f172a;            /* tekst */
+  --ink-2: #334155;          /* tekst sekundarny */
+  --line: #e5e7eb;           /* obramowania */
+  --bg: #f6f8fc;             /* tło strony */
+  --card: #ffffff;           /* tło kart */
+  --success: #166534;
+  --warning: #c2410c;
+  --shadow: 0 6px 24px rgba(13,27,76,.08), 0 2px 8px rgba(13,27,76,.06);
+  --radius-lg: 16px;
+  --radius-md: 12px;
+  --radius-sm: 10px;
+}
 
-/* Inputs & lists */
-.inp { width: 100%; padding: .6rem .8rem; font-size: 1rem; border: 1px solid #dde2e7; border-radius: 10px; }
-.list .row { padding: .5rem .75rem; border-bottom: 1px solid #eee; cursor: pointer; }
-.list .row:hover { background: #f6f8fa; }
+/* === Reset + typografia === */
+*{box-sizing:border-box}
+html,body{margin:0;padding:0;background:var(--bg);color:var(--ink);font:16px/1.55 system-ui,-apple-system,Segoe UI,Roboto,Inter,Arial,sans-serif}
+h1,h2,h3{color:var(--ink);margin:0 0 .75rem}
+h1{font-size:clamp(28px,3.8vw,42px);font-weight:800;letter-spacing:-.02em}
+h2{font-size:clamp(20px,2.4vw,28px);font-weight:800;letter-spacing:-.01em}
+h3{font-size:clamp(16px,1.6vw,20px);font-weight:700}
+a{color:var(--brand-2);text-decoration:none}
+a:hover{text-decoration:underline}
 
-/* Cards grid */
-.grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 12px; }
-.card { border: 1px solid #e5e7eb; border-radius: 12px; padding: 12px; background: #fff; box-shadow: 0 1px 2px rgba(0,0,0,.04); }
-.card-h { display: flex; justify-content: space-between; align-items: center; font-weight: 700; margin-bottom: .5rem; }
+/* === Layout główny === */
+.calc-wrap{max-width:1120px;margin:32px auto;padding:0 20px}
+.view{background:transparent}
 
-/* Badges & tiers */
-.badge { background: #e8f5e9; color: #1b5e20; font-size: .75rem; padding: .1rem .4rem; border-radius: 8px; }
-.tiers { display: grid; grid-template-columns: repeat(5, auto); gap: 6px; align-items: center; }
-.qty { width: 64px; margin-left: 8px; }
+/* === Pole wyszukiwarki === */
+.inp{
+  width:100%;
+  padding:14px 16px;
+  background:#fff;
+  border:1px solid var(--line);
+  border-radius:999px;
+  box-shadow:var(--shadow);
+  outline:none;
+  transition:border-color .15s ease, box-shadow .15s ease;
+}
+.inp:focus{border-color:var(--brand-2);box-shadow:0 0 0 4px rgba(14,165,233,.15), var(--shadow)}
 
-/* Summary */
-.summary { border: 1px dashed #e5e7eb; border-radius: 12px; padding: 12px; background: #fafafa; }
-.btn { margin-top: 12px; padding: .7rem 1rem; border: none; background: #0ea5e9; color: white; border-radius: 10px; cursor: pointer; }
-.btn:hover { filter: brightness(.95); }
-.muted { color: #556; opacity: .7; }
-.ok { color: #166534; font-weight: 600; }
-.loading { opacity: .6; pointer-events: none; }
+/* Wyniki wyszukiwarki */
+.list{margin-top:10px;background:var(--card);border:1px solid var(--line);border-radius:var(--radius-lg);box-shadow:var(--shadow);overflow:hidden}
+.list .row{padding:12px 16px;display:flex;gap:8px;align-items:center;cursor:pointer}
+.list .row:not(:last-child){border-bottom:1px solid var(--line)}
+.list .row:hover{background:#f0f7ff}
 
-/* NOWE: sekcja "Obecnie posiadane" */
-.owned { margin: 12px 0 20px; padding: 12px; border: 1px solid #e5e7eb; border-radius: 12px; background: #fff; }
-.owned-list { display: grid; grid-template-columns: 1fr; gap: 6px; }
-.owned-row { display: flex; justify-content: space-between; align-items: center; padding: 6px 8px; border: 1px dashed #e5e7eb; border-radius: 10px; background: #fafafa; }
-.owned-name { font-weight: 600; }
-.owned-date { font-size: .9rem; opacity: .8; }
-.owned-empty { font-style: italic; opacity: .7; }
+/* === Karty + siatki === */
+.grid{display:grid;gap:16px;grid-template-columns:repeat(auto-fit,minmax(260px,1fr))}
+.card{
+  background:var(--card);
+  border:1px solid var(--line);
+  border-radius:var(--radius-lg);
+  padding:16px 16px 14px;
+  box-shadow:var(--shadow);
+}
+.card-h{display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;font-weight:800}
+.badge{padding:.2rem .5rem;border-radius:999px;font-size:.75rem;background:#e8f5e9;color:var(--success);border:1px solid #a7e3b1}
+
+/* === „Segmented” przyciski dla Tiera === */
+.tiers{
+  display:grid;
+  grid-template-columns:repeat(5,1fr);
+  gap:8px;
+}
+.tiers input{display:none}
+.tiers label{
+  display:block;text-align:center;user-select:none;cursor:pointer;
+  padding:10px 8px;border:1px solid var(--line);border-radius:10px;background:#f8fafc;
+  font-weight:600;color:var(--ink-2);transition:all .15s ease;
+}
+.tiers input:checked + label{
+  background:linear-gradient(180deg,#f1faff, #e8f6ff);
+  border-color:#cfe9ff;color:var(--brand);
+  box-shadow:inset 0 0 0 2px rgba(14,165,233,.25);
+}
+.tiers label:hover{transform:translateY(-1px)}
+
+/* === Sekcja „Obecnie posiadane” === */
+.owned{
+  background:var(--card);border:1px solid var(--line);border-radius:var(--radius-lg);
+  padding:16px;margin:12px 0 22px;box-shadow:var(--shadow)
+}
+.company-tier{font-weight:700;color:var(--brand-2)}
+.owned-list{display:grid;gap:10px}
+.owned-row{
+  display:flex;align-items:center;justify-content:space-between;gap:12px;
+  padding:10px 12px;background:#f8fafc;border:1px dashed var(--line);border-radius:var(--radius-md)
+}
+.owned-name{font-weight:700}
+.owned-date{font-size:.95rem;color:var(--ink-2)}
+.owned-empty{font-style:italic;color:var(--ink-2)}
+
+/* === Toggle „Pakiet” === */
+.pkg{display:flex;align-items:center;gap:10px;margin:8px 0 18px;font-weight:700}
+.pkg input{appearance:none;width:44px;height:26px;border-radius:999px;background:#e5edf8;position:relative;outline:none;cursor:pointer;transition:background .18s ease}
+.pkg input::after{
+  content:"";position:absolute;top:3px;left:3px;width:20px;height:20px;border-radius:50%;background:#fff;
+  box-shadow:0 2px 6px rgba(0,0,0,.15);transition:transform .18s ease
+}
+.pkg input:checked{background:#cfe9ff}
+.pkg input:checked::after{transform:translateX(18px)}
+.pkg:hover input{box-shadow:0 0 0 4px rgba(14,165,233,.12)}
+
+/* === Usługi / ilości === */
+.qty{width:74px;padding:8px 10px;border:1px solid var(--line);border-radius:10px;background:#fff}
+label{cursor:pointer}
+
+/* === Podsumowanie + CTA === */
+.summary{
+  background:var(--card);border:1px dashed var(--line);border-radius:var(--radius-lg);
+  padding:14px;box-shadow:var(--shadow);color:var(--ink)
+}
+.btn{
+  margin-top:14px;display:inline-flex;align-items:center;gap:10px;
+  padding:12px 18px;border:none;border-radius:999px;color:#fff;background:linear-gradient(180deg,#2ea7ff,#0e7ed3);
+  box-shadow:0 8px 24px rgba(14,126,211,.25);cursor:pointer;font-weight:800;letter-spacing:.02em
+}
+.btn:hover{filter:brightness(.98);transform:translateY(-1px)}
+.btn:active{transform:translateY(0)}
+.ok{color:var(--success);font-weight:700}
+.loading{opacity:.6;pointer-events:none}
+
+.muted{color:var(--ink-2)}
+
+/* === Responsywny odstęp nad H1, żeby „oddychało” pod Waszym headerem === */
+.calc-wrap{margin-top:clamp(16px,5vw,40px)}
+
+/* === Drobne poprawki dostępności === */
+:focus-visible{outline:3px solid rgba(14,165,233,.35);outline-offset:2px;border-radius:8px}
