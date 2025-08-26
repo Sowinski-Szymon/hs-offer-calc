@@ -11,6 +11,8 @@ const { hsFetch } = require('./_lib/hs');
  *   title?: "Oferta – ...",           // opcjonalne
  *   items: [ { productId: "PID", qty: 1 }, ... ],    // wymagane
  *   discountPLN?: 0                   // opcjonalnie dodajemy linię z rabatem kwotowym (ujemna)
+ *
+ *   // UWAGA: NIE zapisujemy tutaj Tiera – zgodnie z Twoją decyzją
  * }
  */
 module.exports = withCORS(async (req, res) => {
@@ -52,12 +54,12 @@ module.exports = withCORS(async (req, res) => {
       });
     }
 
-    // 3) Dodaj pozycje (line items)
+    // 3) Dodaj pozycje (line items) – z produktów katalogowych
     for (const it of items) {
       const { productId, qty } = it;
       if (!productId) continue;
 
-      // line_item -> z produktem z katalogu (wyciągnie cenę z katalogu)
+      // line_item z produktem (ceny pobierze HS wg produktu/automatyki)
       const li = await hsFetch(`/crm/v3/objects/line_items`, {
         method: 'POST',
         body: JSON.stringify({
@@ -68,7 +70,7 @@ module.exports = withCORS(async (req, res) => {
         })
       });
 
-      // połącz line_item z quote
+      // Połącz line_item z quote
       await hsFetch(`/crm/v4/objects/quotes/${quoteId}/associations/line_items/${li.id}`, {
         method: 'PUT',
         body: JSON.stringify({
@@ -85,7 +87,7 @@ module.exports = withCORS(async (req, res) => {
         body: JSON.stringify({
           properties: {
             name: 'Rabat pakietowy',
-            price: String(-rabat),      // ujemna cena
+            price: String(-rabat),  // ujemna cena
             quantity: '1'
           }
         })
@@ -99,7 +101,7 @@ module.exports = withCORS(async (req, res) => {
       });
     }
 
-    // 5) Zwróć świeżo utworzony Quote (minimalny zestaw pól)
+    // 5) Zwróć świeżo utworzony Quote
     const q = await hsFetch(`/crm/v3/objects/quotes/${quoteId}?properties=hs_title,hs_status,hs_public_url`);
 
     return res.status(200).json({
