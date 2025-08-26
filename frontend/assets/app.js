@@ -369,92 +369,101 @@
     }
 
     function renderSummaryBox(){
-      summaryBox.innerHTML = '';
-      const tier = state.global.tier;
+  summaryBox.innerHTML = '';
+  const tier = state.global.tier;
 
-      // Produkty główne – etykiety
-      const selectedMainLabels = [...state.selection.main.values()].map(k => MAIN_LABELS_BY_KEY[k] || k);
-      const selectedMainTotal = selectedMainLabels.reduce((s,lab)=> s + getPriceByLabel(lab, tier), 0);
+  // Wybrane produkty główne (NOWE)
+  const selectedMainLabels = [...state.selection.main.values()].map(k => MAIN_LABELS_BY_KEY[k] || k);
+  const selectedMainTotal = selectedMainLabels.reduce((s,lab)=> s + getPriceByLabel(lab, tier), 0);
 
-      // Usługi
-      const selectedServiceLabels = [...state.selection.services.values()].map(k => SERVICE_LABELS_BY_KEY[k] || k);
-      const selectedServicesTotal = selectedServiceLabels.reduce((s,lab)=> s + getPriceByLabel(lab, tier), 0);
+  // POSIADANE produkty główne (dla Pakiet=ON doliczamy je do ceny)
+  const ownedMainLabels = [...state.ownedMain.values()].map(k => MAIN_LABELS_BY_KEY[k] || k);
+  const ownedMainTotal  = ownedMainLabels.reduce((s,lab)=> s + getPriceByLabel(lab, tier), 0);
 
-      // Dodatkowi użytkownicy
-      const extraQty  = Number(state.global.extraUsers||0);
-      const extraUnit = Number(EXTRA_USER_PRICES[tier] || 0);
-      const extraTotal= extraQty * extraUnit;
+  // Usługi (wybrane)
+  const selectedServiceLabels = [...state.selection.services.values()].map(k => SERVICE_LABELS_BY_KEY[k] || k);
+  const selectedServicesTotal = selectedServiceLabels.reduce((s,lab)=> s + getPriceByLabel(lab, tier), 0);
 
-      // Rabat pakietowy & kompensata – tylko przy Pakiecie
-      let discount = 0;
-      let compensationDiscount = 0; // kompensata jako RABAT
-      if (state.global.packageMode) {
-        const unionCount = new Set([...state.ownedMain, ...state.selection.main]).size;
-        discount = bundleDiscount(unionCount);
-        compensationDiscount = computeCompensation(); // wartość rabatu (odejmujemy)
-      }
+  // Dodatkowi użytkownicy
+  const extraQty  = Number(state.global.extraUsers||0);
+  const extraUnit = Number(EXTRA_USER_PRICES[tier] || 0);
+  const extraTotal= extraQty * extraUnit;
 
-      // Netto do zapłaty
-      const netPayable = Math.max(0, selectedMainTotal + selectedServicesTotal + extraTotal - discount - compensationDiscount);
-      const vat = netPayable * 0.23;
-      const gross = netPayable + vat;
-
-      // Widok tabeli:
-      if (state.global.packageMode) {
-        // ✅ TYLKO lista pozycji (bez kolumny „Suma” i bez cen)
-        const ul = h('ul',{class:'list-plain'});
-        selectedMainLabels.forEach(lab=> ul.append(h('li',{}, lab)));
-        selectedServiceLabels.forEach(lab=> ul.append(h('li',{}, lab)));
-        if (extraQty>0) ul.append(h('li',{}, `Dodatkowi użytkownicy (${extraQty})`));
-        summaryBox.append(ul);
-
-      } else {
-        // Standardowa tabela z ceną jedn. (bez rabatów na liniach)
-        const list = h('div',{class:'li-table'});
-        list.append(rowLi4('Pozycja','Qty','Cena jedn.','Suma', true));
-        selectedMainLabels.forEach(lab=>{
-          const price = getPriceByLabel(lab, tier);
-          list.append(rowLi4(lab,'1',money(price),money(price)));
-        });
-        selectedServiceLabels.forEach(lab=>{
-          const price = getPriceByLabel(lab, tier);
-          list.append(rowLi4(lab,'1',money(price),money(price)));
-        });
-        if (extraQty>0){
-          list.append(rowLi4('Dodatkowi użytkownicy', String(extraQty), money(extraUnit), money(extraTotal)));
-        }
-        summaryBox.append(list);
-      }
-
-      // Podsumowania
-      const sums = h('div',{class:'totals'});
-      if (state.global.packageMode) {
-        sums.append(
-          h('div',{}, `Rabat pakietowy: -${money(discount)}`),
-          h('div',{}, `Rekompensata: -${money(compensationDiscount)}`)
-        );
-      }
-      sums.append(
-        h('div',{}, `Razem netto: ${money(netPayable)}`),
-        h('div',{}, `VAT 23%: ${money(vat)}`),
-        h('div',{class:'totals-grand'}, `Razem brutto: ${money(gross)}`)
-      );
-      summaryBox.append(sums);
-
-      function rowLi4(a,b,c,d,head=false){
-        const r = h('div',{class:'li-row'+(head?' li-head':'')});
-        r.append(h('div',{},a),h('div',{},b),h('div',{},c),h('div',{},d));
-        return r;
-      }
-      // rowLi2 zostawiamy, choć nieużywane po tej zmianie – nie wpływa na resztę
-      function rowLi2(a,b,head=false){
-        const r = h('div',{class:'li-row'+(head?' li-head':'')});
-        r.style.gridTemplateColumns = '1fr 160px';
-        r.append(h('div',{},a),h('div',{},b));
-        return r;
-      }
-    }
+  // Rabat pakietowy & kompensata – tylko przy Pakiecie
+  let discount = 0;
+  let compensationDiscount = 0; // kompensata jako RABAT (odejmujemy)
+  if (state.global.packageMode) {
+    const unionCount = new Set([...state.ownedMain, ...state.selection.main]).size;
+    discount = bundleDiscount(unionCount);
+    compensationDiscount = computeCompensation();
   }
+
+  // Suma modułów głównych:
+  // - Pakiet ON → sumujemy POSIADANE + WYBRANE
+  // - Pakiet OFF → tylko WYBRANE
+  const mainTotalForCalc = state.global.packageMode
+    ? (ownedMainTotal + selectedMainTotal)
+    : selectedMainTotal;
+
+  // Netto do zapłaty
+  const netPayable = Math.max(0, mainTotalForCalc + selectedServicesTotal + extraTotal - discount - compensationDiscount);
+  const vat = netPayable * 0.23;
+  const gross = netPayable + vat;
+
+  // Widok tabeli/listy:
+  if (state.global.packageMode) {
+    // ✅ TYLKO lista nazw (bez cen/kolumn)
+    const ul = h('ul',{class:'list-plain'});
+    // najpierw posiadane
+    ownedMainLabels.forEach(lab=> ul.append(h('li',{}, lab)));
+    // potem nowe
+    selectedMainLabels.forEach(lab=> ul.append(h('li',{}, lab)));
+    // usługi
+    selectedServiceLabels.forEach(lab=> ul.append(h('li',{}, lab)));
+    // extra users
+    if (extraQty>0) ul.append(h('li',{}, `Dodatkowi użytkownicy (${extraQty})`));
+    summaryBox.append(ul);
+
+  } else {
+    // Standardowa tabela (Pozycja / Qty / Cena jedn. / Suma)
+    const list = h('div',{class:'li-table'});
+    list.append(rowLi4('Pozycja','Qty','Cena jedn.','Suma', true));
+    selectedMainLabels.forEach(lab=>{
+      const price = getPriceByLabel(lab, tier);
+      list.append(rowLi4(lab,'1',money(price),money(price)));
+    });
+    selectedServiceLabels.forEach(lab=>{
+      const price = getPriceByLabel(lab, tier);
+      list.append(rowLi4(lab,'1',money(price),money(price)));
+    });
+    if (extraQty>0){
+      list.append(rowLi4('Dodatkowi użytkownicy', String(extraQty), money(extraUnit), money(extraTotal)));
+    }
+    summaryBox.append(list);
+  }
+
+  // Podsumowania
+  const sums = h('div',{class:'totals'});
+  if (state.global.packageMode) {
+    sums.append(
+      h('div',{}, `Rabat pakietowy: -${money(discount)}`),
+      h('div',{}, `Rekompensata: -${money(compensationDiscount)}`)
+    );
+  }
+  sums.append(
+    h('div',{}, `Razem netto: ${money(netPayable)}`),
+    h('div',{}, `VAT 23%: ${money(vat)}`),
+    h('div',{class:'totals-grand'}, `Razem brutto: ${money(gross)}`)
+  );
+  summaryBox.append(sums);
+
+  function rowLi4(a,b,c,d,head=false){
+    const r = h('div',{class:'li-row'+(head?' li-head':'')});
+    r.append(h('div',{},a),h('div',{},b),h('div',{},c),h('div',{},d));
+    return r;
+  }
+}
+
 
   // ====== Widok 3: summary (placeholder) ======
   function viewSummary(){
