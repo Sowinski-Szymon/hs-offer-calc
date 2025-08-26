@@ -345,3 +345,26 @@ input[type="text"]:focus{
 .btn:hover{ transform:translateY(-1px); box-shadow:0 8px 30px rgba(2,8,23,.08); }
 .btn-primary{ background: var(--brand, #2b6cb0); color:#fff; border-color: var(--brand, #2b6cb0); }
 .btn-secondary{ background:#eef6ff; color:#0b3a78; border-color:#cde6ff; }
+
+/* Chips (Pakiet=ON) */
+.chips{
+  display:flex;
+  gap:8px;
+  flex-wrap:wrap;
+  margin-top:6px;
+}
+.chip{
+  display:inline-flex;
+  align-items:center;
+  padding:6px 10px;
+  border-radius:999px;
+  background:#f3f6fb;
+  border:1px solid #e4eaf3;
+  font-weight:700;
+  font-size:13px;
+  line-height:1;
+}
+.chip--owned{ background:#f0fff4; border-color:#c6f6d5; color:#065f46; }      /* posiadane */
+.chip--new{   background:#f2f8ff; border-color:#bfe0ff; color:#0b3a78; }      /* wybrane teraz */
+.chip--svc{   background:#fff7ed; border-color:#fed7aa; color:#9a3412; }      /* usługi */
+.chip--extra{ background:#eef2ff; border-color:#c7d2fe; color:#3730a3; }      /* dodatkowi userzy */
