@@ -21,7 +21,7 @@
     overview: null,
     ownedMain: new Set(),                        // WPF/BUDZET/UMOWY/SWB
     selection: { main: new Set(), services: new Set() }, // zestawy wybranych kluczy
-    global: { packageMode: true, tier: 'Solo', extraUsers: 0 }, // ustawienia globalne
+    global: { packageMode: true, tier: 'Tier1' },        // Tier1–Tier4, Pakiet
     lastQuote: null,
     router: { page: 'builder' },                // 'builder' | 'summary'
     context: { deal: null, owners: [] }         // dane dla strony podsumowania
@@ -94,6 +94,7 @@
       state.catalog = catalog;
       state.overview = overview;
 
+      // Tier firmy jeżeli zapisany w CRM – można użyć jako domyślny (opcjonalnie)
       if (overview?.company?.tier) state.global.tier = overview.company.tier;
 
       const ownedKeysFromProps = new Set((overview?.owned?.main||[]).map(x=>x.key));
@@ -101,7 +102,6 @@
       state.ownedMain = new Set([...ownedKeysFromProps, ...ownedKeysFromDeals]);
 
       state.selection = { main: new Set(), services: new Set() };
-      state.global.extraUsers = 0;
 
       viewProductPicker();
     }catch(e){
@@ -115,7 +115,7 @@
     const wrap = h('div',{class:'view'});
 
     const title = h('h2',{}, `Firma: ${state.company.properties.name}`);
-    if (state.overview?.company?.tier) title.appendChild(h('span',{class:'company-tier'}, ` · Tier: ${state.overview.company.tier}`));
+    if (state.overview?.company?.tier) title.appendChild(h('span',{class:'company-tier'}, ` · Tier CRM: ${state.overview.company.tier}`));
     wrap.appendChild(title);
 
     // Obecnie posiadane
@@ -149,7 +149,7 @@
     const tierWrap = h('div',{class:'row-inline'});
     tierWrap.append(h('label',{},'Tier: '));
     const tierSel = h('select',{class:'select'});
-    ['Solo','Plus','Pro','Max'].forEach(t=>{
+    ['Tier1','Tier2','Tier3','Tier4'].forEach(t=>{
       const opt=h('option',{value:t},t);
       if (t===state.global.tier) opt.selected=true;
       tierSel.appendChild(opt);
@@ -157,14 +157,6 @@
     tierSel.addEventListener('change',()=>{ state.global.tier = tierSel.value; });
     tierWrap.appendChild(tierSel);
     settings.appendChild(tierWrap);
-
-    const extraSvc = (state.catalog.services||[]).find(s=>s.qtySelectable);
-    const extraWrap = h('div',{class:'row-inline'});
-    extraWrap.append(h('label',{}, extraSvc ? extraSvc.label : 'Dodatkowi użytkownicy'));
-    const extraInp = h('input',{type:'number',min:'0',value:String(state.global.extraUsers||0),class:'qty'});
-    extraInp.addEventListener('change',()=>{ const v = Number(extraInp.value||0); state.global.extraUsers = Math.max(0, v); });
-    extraWrap.appendChild(extraInp);
-    settings.appendChild(extraWrap);
 
     wrap.appendChild(settings);
 
@@ -189,9 +181,9 @@
     });
     wrap.append(h('h3',{},'Produkty główne'), mainBar);
 
-    // Usługi — kafelki (bez tej od extra users)
+    // Usługi — kafelki
     const svcTiles = h('div',{class:'tiles'});
-    (state.catalog.services||[]).filter(s=>!s.qtySelectable).forEach(svc=>{
+    (state.catalog.services||[]).forEach(svc=>{
       const selected = state.selection.services.has(svc.key);
       const tile = buildTile({
         label: svc.label,
@@ -207,7 +199,7 @@
     });
     wrap.append(h('h3',{},'Usługi'), svcTiles);
 
-    // Podsumowanie (tylko display) + CTA: Przejdź do podsumowania
+    // Podsumowanie (display) + CTA: Przejdź do podsumowania
     const summary = h('div',{class:'summary'});
     const toSummary = h('button',{class:'btn btn-secondary', onClick: async ()=>{
       await loadSummaryData();
@@ -231,20 +223,18 @@
 
   function buildItemsPayload(){
     const items = [];
+    // Produkty główne – jeden productId per moduł
     (state.catalog.mainProducts||[]).forEach(mp=>{
       if (state.selection.main.has(mp.key)) {
-        const tier = state.global.tier;
-        const pid = mp.tiers?.[tier]?.productId;
-        if (pid) items.push({ productId: pid, qty: 1 });
+        if (mp.productId) items.push({ productId: mp.productId, qty: 1 });
       }
     });
-    (state.catalog.services||[]).filter(s=>!s.qtySelectable).forEach(svc=>{
-      if (state.selection.services.has(svc.key)) items.push({ productId: svc.productId, qty: 1 });
+    // Usługi (po 1 szt.)
+    (state.catalog.services||[]).forEach(svc=>{
+      if (state.selection.services.has(svc.key)) {
+        if (svc.productId) items.push({ productId: svc.productId, qty: 1 });
+      }
     });
-    const extraSvc = (state.catalog.services||[]).find(s=>s.qtySelectable);
-    if (extraSvc && state.global.extraUsers>0) {
-      items.push({ productId: extraSvc.productId, qty: state.global.extraUsers });
-    }
     return items;
   }
 
@@ -258,15 +248,14 @@
       h('div',{}, `Wybrane produkty główne: ${selectedMain.join(', ') || '–'}`),
       h('div',{}, `Tryb: ${state.global.packageMode ? 'Pakiet (posiadane + nowe)' : 'Tylko nowe'}`),
       h('div',{}, `Tier (globalny): ${state.global.tier}`),
-      h('div',{}, `Dodatkowi użytkownicy: ${state.global.extraUsers}`),
       h('div',{}, `Rabat pakietowy: ${discount} PLN`)
     );
   }
 
   // ===== Summary page =====
   async function loadSummaryData(){
-    // PODMIEŃ na realne ID Waszego pipeline’u
-    const pipelineId = 'default'; // <--- TU wstaw Wasze ID!
+    // Używamy podanego pipeline ID: "default"
+    const pipelineId = 'default';
     const dealResp = await api(`${ep.dealByCompany}?companyId=${encodeURIComponent(state.company.id)}&pipelineId=${encodeURIComponent(pipelineId)}`);
     state.context.deal = dealResp.deal;
     const ownersResp = await api(ep.owners);
@@ -286,7 +275,7 @@
 
     const dealBox = h('div',{class:'card'});
     if (!state.context.deal) {
-      dealBox.append(h('div',{},'Brak powiązanego deala w wybranym pipeline.'));
+      dealBox.append(h('div',{},'Brak powiązanego deala w pipeline „default”.'));
     } else {
       const d = state.context.deal;
       dealBox.append(
@@ -323,6 +312,7 @@
           items,
           discountPLN: discount,
           title: `Oferta – ${state.company.properties.name}`
+          // Tier celowo NIE wysyłany do HS; używasz go później w automatyzacji dealowej
         };
         await api(ep.createQuote, { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(payload) });
         await renderQuotesList(container);
@@ -373,8 +363,8 @@
         });
         body.append(table);
 
-        const discountCalc = computeDiscount(); // nasz „pakietowy” rabat z kreatora
-        const recomp = 0; // miejsce na „rekompensatę” jeśli wprowadzicie
+        const discountCalc = computeDiscount();
+        const recomp = 0; // tu możesz w przyszłości wliczyć „rekompensatę”
         const grand = Math.max(0, sumNet - discountCalc - recomp);
         const totals = h('div',{class:'totals'},
           h('div',{}, `Suma pozycji: ${sumNet.toFixed(2)} PLN`),
