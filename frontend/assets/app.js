@@ -45,7 +45,11 @@
     ownedMain: new Set(),         // klucze: WPF/BUDZET/UMOWY/SWB
     selection: { main: new Set(), services: new Set() },
     global: { packageMode: false, tier: 'Tier1', extraUsers: 0, startDate: null },
-    router: { page: 'builder' }
+    router: { page: 'builder' },
+
+    // Summary data
+    deal: null,      // { id, name, owner:{id,name,email}, pipelineId }
+    quotes: []       // [{id,title,status,publicUrl,amount,lineItems:[{name,qty,unitPrice,discountPercent,lineTotal}]}]
   };
 
   // ====== Utils ======
@@ -318,7 +322,7 @@
 
     // Podsumowanie (estymacja)
     const summaryBox = h('div',{class:'card summary'});
-    wrap.append(h('h3',{},'Podsumowanie (estymacja)'), summaryBox);
+    wrap.append(h('h3',},'Podsumowanie (estymacja)'), summaryBox);
 
     // CTA
     wrap.appendChild(h('button',{class:'btn btn-primary', type:'button', onclick:()=>go('summary')},'Przejdź do podsumowania'));
@@ -412,21 +416,18 @@
 
       // Widok:
       if (state.global.packageMode) {
-  // Pakiet ON → chipsy (bez cen)
-  const chips = h('div',{class:'chips'});
-  const chip = (label, type) => h('span',{class:`chip ${type ? 'chip--'+type : ''}`}, label);
+        // Pakiet ON → chipsy (bez cen)
+        const chips = h('div',{class:'chips'});
+        const chip = (label, type) => h('span',{class:`chip ${type ? 'chip--'+type : ''}`}, label);
 
-  // posiadane
-  ownedMainLabels.forEach(lab=> chips.append(chip(lab,'owned')));
-  // nowe
-  selectedMainLabels.forEach(lab=> chips.append(chip(lab,'new')));
-  // usługi
-  selectedServiceLabels.forEach(lab=> chips.append(chip(lab,'svc')));
-  // extra users
-  if (extraQty>0) chips.append(chip(`Dodatkowi użytkownicy (${extraQty})`,'extra'));
+        ownedMainLabels.forEach(lab=> chips.append(chip(lab,'owned')));
+        selectedMainLabels.forEach(lab=> chips.append(chip(lab,'new')));
+        selectedServiceLabels.forEach(lab=> chips.append(chip(lab,'svc')));
+        if (extraQty>0) chips.append(chip(`Dodatkowi użytkownicy (${extraQty})`,'extra'));
 
-  summaryBox.append(chips);
-} else {
+        summaryBox.append(chips);
+
+      } else {
         // Pakiet OFF → tabela Pozycja/Qty/Cena jedn./Suma
         const list = h('div',{class:'li-table'});
         list.append(rowLi4('Pozycja','Qty','Cena jedn.','Suma', true));
@@ -467,14 +468,111 @@
     }
   }
 
-  // ====== Widok 3: summary (placeholder) ======
-  function viewSummary(){
-    const w = h('div',{class:'view'});
-    w.appendChild(h('h2',{},'Podsumowanie'));
-    w.appendChild(h('div',{class:'muted'}, 'Widok deal/quotes dołączymy po akceptacji UI kalkulatora.'));
-    w.appendChild(h('button',{class:'btn btn-secondary', type:'button', onclick:()=>go('products')},'← Wróć do kreatora'));
+  // ====== Widok 3: summary ======
+  async function viewSummary(){
+    const wrap = h('div',{class:'view'});
+    wrap.appendChild(h('h2',{},'Podsumowanie'));
+
+    const top = h('div',{class:'card'});
+    const dealBox = h('div',{});
+    const refreshBtn = h('button',{class:'btn', type:'button', onclick: async ()=>{ await loadDealAndQuotes(); renderSummarySections(); }}, 'Odśwież');
+    top.appendChild(h('div',{class:'row', style:'justify-content:space-between;align-items:center;'},
+      h('h3',{},'Powiązany deal'),
+      refreshBtn
+    ));
+    top.appendChild(dealBox);
+
+    const quotesCard = h('div',{class:'card', style:'margin-top:12px;'});
+    const quotesBox = h('div',{});
+    quotesCard.appendChild(h('h3',{},'Quotes'));
+    quotesCard.appendChild(quotesBox);
+
+    wrap.appendChild(top);
+    wrap.appendChild(quotesCard);
+
+    // Nawigacja
+    wrap.appendChild(h('button',{class:'btn btn-secondary', type:'button', onclick:()=>go('products')},'← Wróć do kreatora'));
+
     $app.innerHTML='';
-    $app.appendChild(w);
+    $app.appendChild(wrap);
+
+    // load + render
+    await loadDealAndQuotes();
+    renderSummarySections();
+
+    async function loadDealAndQuotes(){
+      state.deal = null;
+      state.quotes = [];
+      try{
+        const d = await api(`${ep.dealByCompany}?companyId=${encodeURIComponent(state.company.id)}`);
+        state.deal = d?.deal || null;
+        if (state.deal?.id) {
+          const qs = await api(`${ep.quotesByDeal}?dealId=${encodeURIComponent(state.deal.id)}`);
+          state.quotes = Array.isArray(qs?.quotes) ? qs.quotes : [];
+        }
+      }catch(e){
+        // zostaw pusto; UI pokaże komunikat
+      }
+    }
+
+    function renderSummarySections(){
+      // Deal header
+      dealBox.innerHTML='';
+      if (!state.deal) {
+        dealBox.appendChild(h('div',{class:'muted'},'Brak powiązanego deala na pipeline 1978057944 (label: newbusiness).'));
+      } else {
+        const owner = state.deal.owner ? `${state.deal.owner.name || '—'}${state.deal.owner.email ? ' · '+state.deal.owner.email : ''}` : '—';
+        const header = h('div',{class:'row', style:'gap:12px;flex-wrap:wrap;'},
+          h('div',{class:'tier-chip'}, `ID: ${state.deal.id}`),
+          h('div',{class:'tier-chip'}, `Owner: ${owner}`),
+          h('div',{class:'tier-chip'}, `Nazwa: ${state.deal.name || '—'}`)
+        );
+        dealBox.appendChild(header);
+      }
+
+      // Quotes list (accordion-like)
+      quotesBox.innerHTML='';
+      if (!state.deal) {
+        quotesBox.appendChild(h('div',{class:'muted'},'Brak deala → brak powiązanych Quotes.'));
+        return;
+      }
+      if (!state.quotes.length) {
+        quotesBox.appendChild(h('div',{class:'muted'},'Brak powiązanych Quotes na tym dealu.'));
+        return;
+      }
+
+      state.quotes.forEach(q => {
+        const acc = h('details',{class:'row', style:'flex-direction:column; align-items:stretch; border:1px solid #e8eef5; border-radius:12px; padding:10px; margin:8px 0;'});
+        const sum = h('summary',{style:'cursor:pointer; font-weight:800;'}, q.title || `Quote ${q.id}`);
+        acc.appendChild(sum);
+
+        // meta
+        const meta = h('div',{class:'muted', style:'margin:6px 0 10px;'},
+          `Status: ${q.status || '—'} · Kwota: ${q.amount!=null ? money(q.amount) : '—'}${q.publicUrl ? ' · ' : ''}`,
+          q.publicUrl ? h('a',{href:q.publicUrl, target:'_blank', rel:'noopener'}, 'Podgląd') : ''
+        );
+        acc.appendChild(meta);
+
+        // line items table
+        const table = h('div',{class:'li-table'});
+        table.append(row4('Pozycja','Qty','Cena jedn.','Suma', true));
+        (q.lineItems || []).forEach(li => {
+          const unit = Number(li.unitPrice||0);
+          const qty  = Number(li.qty||0);
+          const disc = Number(li.discountPercent||0);
+          const after = unit * qty * (disc ? (1 - disc/100) : 1);
+          table.append(row4(li.name||'—', String(qty), money(unit), money(after)));
+        });
+        acc.appendChild(table);
+        quotesBox.appendChild(acc);
+      });
+
+      function row4(a,b,c,d,head=false){
+        const r = h('div',{class:'li-row'+(head?' li-head':'')});
+        r.append(h('div',{},a),h('div',{},b),h('div',{},c),h('div',{},d));
+        return r;
+      }
+    }
   }
 
   // ====== Init ======
@@ -492,7 +590,9 @@
       search: base ? `${base}/companies-search` : '',
       overview: base ? `${base}/company-overview` : '',
       catalog: base ? `${base}/catalog` : '',
-      companyBilling: base ? `${base}/company-billing` : '' // opcjonalny
+      companyBilling: base ? `${base}/company-billing` : '', // opcjonalny
+      dealByCompany: base ? `${base}/deal-by-company` : '',
+      quotesByDeal: base ? `${base}/quotes-by-deal` : ''
     };
 
     go('builder');
