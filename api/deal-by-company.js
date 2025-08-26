@@ -1,11 +1,9 @@
-// /api/deal-by-company.js
 const { withCORS } = require('./_lib/cors');
 const { hsFetch } = require('./_lib/hs');
 
-// Stałe wg wymagań:
 const PIPELINE_ID = '1978057944';
-// Zgodnie z dokumentacją HubSpot, ID dla powiązania "Primary Company" to 1.
-const PRIMARY_COMPANY_ASSOC_ID = 1; 
+// Zmień na string, aby dopasować do zwracanego typeId (może być string)
+const PRIMARY_COMPANY_ASSOC_ID = '1'; 
 
 module.exports = withCORS(async (req, res) => {
   try {
@@ -17,24 +15,25 @@ module.exports = withCORS(async (req, res) => {
 
     // 1) Pobierz powiązania Company -> Deals
     const assoc = await hsFetch(`/crm/v4/objects/companies/${companyId}/associations/deals`);
-    
-    // 2) Filtruj powiązania, aby znaleźć tylko te, gdzie firma jest "Primary" dla deala.
+
+    // Debug: możesz wypisać assoc, np.
+    // console.log('Associations:', JSON.stringify(assoc, null, 2));
+
+    // 2) Filtruj powiązania po typeId (Primary Company)
     const dealIds = (assoc?.results || [])
-      .filter(r => 
-        (r.associationTypes || []).some(t => t.typeId === PRIMARY_COMPANY_ASSOC_ID)
-      )
-      .map(r => r.to?.id)
+      .filter(r => r.typeId === PRIMARY_COMPANY_ASSOC_ID)
+      .map(r => r.id)
       .filter(Boolean);
 
     if (!dealIds.length) {
-      // Jeśli nie znaleziono deala z powiązaniem typu "Primary", zwróć null.
       return res.status(200).json({ deal: null });
     }
 
-    // 3) Pobierz każdy deal i zatrzymaj pierwszy z właściwym pipeline
+    // 3) Pobierz każdy deal, zatrzymaj pierwszy w wymaganym pipeline
     let found = null;
     for (const id of dealIds) {
       const d = await hsFetch(`/crm/v3/objects/deals/${id}?properties=dealname,pipeline,hubspot_owner_id`);
+
       if ((d?.properties?.pipeline || '') === PIPELINE_ID) {
         found = d;
         break;
