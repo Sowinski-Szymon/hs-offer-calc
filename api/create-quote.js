@@ -1,63 +1,112 @@
+// /api/create-quote.js
 const { withCORS } = require('./_lib/cors');
 const { hsFetch } = require('./_lib/hs');
 
+/**
+ * BODY:
+ * {
+ *   companyId: "xxxx",                // wymagane
+ *   dealId?: "yyyy",                  // opcjonalne (skojarzymy quote z dealem)
+ *   ownerId?: "12345",                // opcjonalne (domyślnie właściciel deala)
+ *   title?: "Oferta – ...",           // opcjonalne
+ *   items: [ { productId: "PID", qty: 1 }, ... ],    // wymagane
+ *   discountPLN?: 0                   // opcjonalnie dodajemy linię z rabatem kwotowym (ujemna)
+ * }
+ */
 module.exports = withCORS(async (req, res) => {
-  if (req.method === 'OPTIONS') return res.status(204).end();
-  if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
+  try {
+    if (req.method === 'OPTIONS') return res.status(204).end();
+    if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
 
-  // zbieranie body
-  let raw = '';
-  await new Promise((resolve, reject) => {
-    req.on('data', chunk => (raw += chunk));
-    req.on('end', resolve);
-    req.on('error', reject);
-  });
-  let payload = {};
-  try { payload = raw ? JSON.parse(raw) : {}; } catch (e) {}
+    const body = req.body || {};
+    const { companyId, dealId, ownerId, title, items, discountPLN } = body;
 
-  const { companyId, dealId, items, discountPLN, title, currency = 'PLN', locale = 'pl' } = payload;
-  if (!companyId) return res.status(400).json({ error: 'companyId required' });
-  if (!Array.isArray(items) || !items.length) return res.status(400).json({ error: 'items required' });
+    if (!companyId) return res.status(400).json({ error: 'companyId required' });
+    if (!Array.isArray(items) || !items.length) return res.status(400).json({ error: 'items required' });
 
-  // 1) Quote (DRAFT)
-  const quote = await hsFetch('/crm/v3/objects/quotes', {
-    method: 'POST',
-    body: {
-      properties: { hs_title: title || 'Oferta', hs_currency: currency, hs_locale: locale },
-      associations: companyId ? [
-        { to: { id: String(companyId) }, types: [{ associationCategory: 'HUBSPOT_DEFINED', associationTypeId: 16 }] }
-      ] : []
-    }
-  });
-  const quoteId = quote.id;
-
-  // 2) Line Items
-  const createdLI = [];
-  for (const it of items) {
-    const body = { properties: { quantity: it.qty || 1 } };
-    if (it.productId) body.properties.hs_product_id = String(it.productId);
-    if (it.name) body.properties.name = it.name;
-    if (typeof it.price === 'number') body.properties.price = it.price;
-    const li = await hsFetch('/crm/v3/objects/line_items', { method: 'POST', body });
-    createdLI.push(li.id);
-  }
-
-  if (discountPLN && discountPLN > 0) {
-    const liDisc = await hsFetch('/crm/v3/objects/line_items', {
+    // 1) Utwórz DRAFT Quote
+    const quoteCreate = await hsFetch(`/crm/v3/objects/quotes`, {
       method: 'POST',
-      body: { properties: { name: 'Rabat pakietowy', quantity: 1, price: -Math.abs(discountPLN) } }
+      body: JSON.stringify({
+        properties: {
+          hs_title: title || 'Oferta',
+          hs_status: 'DRAFT',
+          ...(ownerId ? { hubspot_owner_id: String(ownerId) } : {})
+        },
+        associations: [
+          // quote -> company
+          { to: { id: String(companyId) }, types: [{ associationCategory: 'HUBSPOT_DEFINED', associationTypeId: 280 }] }
+        ]
+      })
     });
-    createdLI.push(liDisc.id);
+
+    const quoteId = String(quoteCreate.id);
+
+    // 2) Jeżeli mamy deal — skojarz quote z dealem
+    if (dealId) {
+      await hsFetch(`/crm/v4/objects/quotes/${quoteId}/associations/deals/${dealId}`, {
+        method: 'PUT',
+        body: JSON.stringify({
+          types: [{ associationCategory: 'HUBSPOT_DEFINED', associationTypeId: 280 }]
+        })
+      });
+    }
+
+    // 3) Dodaj pozycje (line items)
+    for (const it of items) {
+      const { productId, qty } = it;
+      if (!productId) continue;
+
+      // line_item -> z produktem z katalogu (wyciągnie cenę z katalogu)
+      const li = await hsFetch(`/crm/v3/objects/line_items`, {
+        method: 'POST',
+        body: JSON.stringify({
+          properties: {
+            hs_product_id: String(productId),
+            quantity: String(qty || 1)
+          }
+        })
+      });
+
+      // połącz line_item z quote
+      await hsFetch(`/crm/v4/objects/quotes/${quoteId}/associations/line_items/${li.id}`, {
+        method: 'PUT',
+        body: JSON.stringify({
+          types: [{ associationCategory: 'HUBSPOT_DEFINED', associationTypeId: 280 }]
+        })
+      });
+    }
+
+    // 4) Linia „Rabat pakietowy” jako dodatkowy line_item (ujemna cena)
+    const rabat = Number(discountPLN || 0);
+    if (rabat > 0) {
+      const liDisc = await hsFetch(`/crm/v3/objects/line_items`, {
+        method: 'POST',
+        body: JSON.stringify({
+          properties: {
+            name: 'Rabat pakietowy',
+            price: String(-rabat),      // ujemna cena
+            quantity: '1'
+          }
+        })
+      });
+
+      await hsFetch(`/crm/v4/objects/quotes/${quoteId}/associations/line_items/${liDisc.id}`, {
+        method: 'PUT',
+        body: JSON.stringify({
+          types: [{ associationCategory: 'HUBSPOT_DEFINED', associationTypeId: 280 }]
+        })
+      });
+    }
+
+    // 5) Zwróć świeżo utworzony Quote (minimalny zestaw pól)
+    const q = await hsFetch(`/crm/v3/objects/quotes/${quoteId}?properties=hs_title,hs_status,hs_public_url`);
+
+    return res.status(200).json({
+      quoteId,
+      properties: q.properties || {}
+    });
+  } catch (e) {
+    return res.status(500).json({ error: 'create-quote failed', detail: String(e && e.message || e) });
   }
-
-  // 3) Associate LI ↔ Quote (default)
-  const assocInputs = createdLI.map(liId => ({ from: { id: String(quoteId) }, to: { id: String(liId) } }));
-  await hsFetch('/crm/v4/associations/quotes/line_items/batch/associate/default', {
-    method: 'POST',
-    body: { inputs: assocInputs }
-  });
-
-  // 4) Return quote props (hs_public_url może wymagać publikacji w HS)
-  const qData = await hsFetch(`/crm/v3/objects/quotes/${quoteId}`);
-  res.status(200).json({ quoteId, properties: qData.properties });
 });
