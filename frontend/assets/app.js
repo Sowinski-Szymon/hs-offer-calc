@@ -7,22 +7,24 @@
     overview: `${base}/company-overview`,
     catalog: `${base}/catalog`,
     createQuote: `${base}/create-quote`,
-    getQuote: `${base}/get-quote`
+    getQuote: `${base}/get-quote`,
+    dealByCompany: `${base}/deal-by-company`,
+    quotesForDeal: `${base}/deal-quotes`,
+    quoteDetails: `${base}/quote-details`,
+    owners: `${base}/owners`
   };
 
-  // ===== State =====
+  // ===== App State =====
   const state = {
     company: null,
     catalog: null,
     overview: null,
-    ownedMain: new Set(),              // klucze: WPF/BUDZET/UMOWY/SWB
-    selection: { main: new Set(), services: new Set() }, // teraz booleany (Set kluczy)
-    global: {                          // Ustawienia globalne
-      packageMode: true,               // "Pakiet"
-      tier: 'Solo',                    // Tier firmy
-      extraUsers: 0                    // Dodatkowi użytkownicy
-    },
-    lastQuote: null
+    ownedMain: new Set(),                        // WPF/BUDZET/UMOWY/SWB
+    selection: { main: new Set(), services: new Set() }, // zestawy wybranych kluczy
+    global: { packageMode: true, tier: 'Solo', extraUsers: 0 }, // ustawienia globalne
+    lastQuote: null,
+    router: { page: 'builder' },                // 'builder' | 'summary'
+    context: { deal: null, owners: [] }         // dane dla strony podsumowania
   };
 
   const $app = document.querySelector('#app');
@@ -39,8 +41,8 @@
     return el;
   }
   async function api(url, opts) { const r = await fetch(url, opts); if (!r.ok) throw new Error(await r.text()); return r.json(); }
-  function fmtDate(val) { if (val === null || val === undefined || val === '') return '—'; const n = Number(val); const d = isNaN(n) ? new Date(String(val)) : new Date(n); return isNaN(d.getTime()) ? '—' : d.toLocaleDateString('pl-PL'); }
-  function bundleDiscount(c){ if (c>=4) return 900; if (c===3) return 600; if (c===2) return 300; return 0; }
+  function fmtDate(val) { if (val===null||val===undefined||val==='') return '—'; const n=Number(val); const d=isNaN(n)?new Date(String(val)):new Date(n); return isNaN(d.getTime())?'—':d.toLocaleDateString('pl-PL'); }
+  function bundleDiscount(c){ if(c>=4) return 900; if(c===3) return 600; if(c===2) return 300; return 0; }
   function computeDiscount(){
     const selectedCount = state.selection.main.size;
     if (state.global.packageMode) {
@@ -48,6 +50,11 @@
       return bundleDiscount(union.size);
     }
     return bundleDiscount(selectedCount);
+  }
+  function go(page){
+    state.router.page = page;
+    if (page === 'builder') viewCompanyPicker();
+    if (page === 'summary') viewSummary();
   }
 
   // ===== View 1: wybór firmy =====
@@ -87,16 +94,13 @@
       state.catalog = catalog;
       state.overview = overview;
 
-      // Tier z firmy (jeśli jest) → globalnie
       if (overview?.company?.tier) state.global.tier = overview.company.tier;
 
       const ownedKeysFromProps = new Set((overview?.owned?.main||[]).map(x=>x.key));
       const ownedKeysFromDeals = new Set(ownedFromDeals?.ownedMainProducts||[]);
       state.ownedMain = new Set([...ownedKeysFromProps, ...ownedKeysFromDeals]);
 
-      // reset wyborów
       state.selection = { main: new Set(), services: new Set() };
-      // liczba userów globalnie domyślnie 0
       state.global.extraUsers = 0;
 
       viewProductPicker();
@@ -106,7 +110,7 @@
     }
   }
 
-  // ===== View 2: kafelki + ustawienia globalne =====
+  // ===== View 2: kreator (kafelki + ustawienia globalne) =====
   function viewProductPicker(){
     const wrap = h('div',{class:'view'});
 
@@ -114,7 +118,7 @@
     if (state.overview?.company?.tier) title.appendChild(h('span',{class:'company-tier'}, ` · Tier: ${state.overview.company.tier}`));
     wrap.appendChild(title);
 
-    // Obecnie posiadane (z datami)
+    // Obecnie posiadane
     if (state.overview) {
       const sec = h('div',{class:'owned'});
       sec.appendChild(h('h3',{},'Obecnie posiadane'));
@@ -132,18 +136,16 @@
       wrap.appendChild(sec);
     }
 
-    // ===== Ustawienia globalne
+    // Ustawienia globalne
     const settings = h('div',{class:'settings'});
     settings.appendChild(h('h3',{},'Ustawienia globalne'));
 
-    // Pakiet
     const pkg = h('label',{class:'pkg'},
       (()=>{ const inp=h('input',{type:'checkbox'}); inp.checked = state.global.packageMode; inp.addEventListener('change',e=>{ state.global.packageMode = e.target.checked; renderSummary(); }); return inp; })(),
       ' Pakiet (licz rabat od posiadanych + nowych)'
     );
     settings.appendChild(pkg);
 
-    // Tier (dla całej jednostki)
     const tierWrap = h('div',{class:'row-inline'});
     tierWrap.append(h('label',{},'Tier: '));
     const tierSel = h('select',{class:'select'});
@@ -156,7 +158,6 @@
     tierWrap.appendChild(tierSel);
     settings.appendChild(tierWrap);
 
-    // Dodatkowi użytkownicy (wykrywamy usługę qtySelectable i przenosimy tu)
     const extraSvc = (state.catalog.services||[]).find(s=>s.qtySelectable);
     const extraWrap = h('div',{class:'row-inline'});
     extraWrap.append(h('label',{}, extraSvc ? extraSvc.label : 'Dodatkowi użytkownicy'));
@@ -167,7 +168,7 @@
 
     wrap.appendChild(settings);
 
-    // ===== Produkty główne — kafelki
+    // Produkty główne — kafelki
     const labelMap = { WPF:'ePublink WPF', BUDZET:'ePublink Budżet', UMOWY:'ePublink Umowy', SWB:'ePublink SWB' };
     const mainBar = h('div',{class:'tiles'});
     (state.catalog.mainProducts||[]).forEach(mp=>{
@@ -178,17 +179,17 @@
         selected: isOwned || isSelected,
         owned: isOwned,
         onClick: () => {
-          if (isOwned) return; // blokada
+          if (isOwned) return;
           if (state.selection.main.has(mp.key)) state.selection.main.delete(mp.key);
           else state.selection.main.add(mp.key);
-          viewProductPicker(); // szybki rerender sekcji
+          viewProductPicker();
         }
       });
       mainBar.appendChild(tile);
     });
     wrap.append(h('h3',{},'Produkty główne'), mainBar);
 
-    // ===== Usługi — kafelki (bez tej od extra users)
+    // Usługi — kafelki (bez tej od extra users)
     const svcTiles = h('div',{class:'tiles'});
     (state.catalog.services||[]).filter(s=>!s.qtySelectable).forEach(svc=>{
       const selected = state.selection.services.has(svc.key);
@@ -206,17 +207,20 @@
     });
     wrap.append(h('h3',{},'Usługi'), svcTiles);
 
-    // ===== Podsumowanie + CTA
+    // Podsumowanie (tylko display) + CTA: Przejdź do podsumowania
     const summary = h('div',{class:'summary'});
-    const btn = h('button',{class:'btn', onClick: async()=>{ await createQuote(summary); }}, 'Generuj ofertę (Quote)');
-    wrap.append(h('h3',{},'Podsumowanie'), summary, btn);
+    const toSummary = h('button',{class:'btn btn-secondary', onClick: async ()=>{
+      await loadSummaryData();
+      go('summary');
+    }}, 'Przejdź do podsumowania');
+
+    wrap.append(h('h3',{},'Podsumowanie'), summary, toSummary);
 
     $app.innerHTML='';
     $app.appendChild(wrap);
     renderSummary();
   }
 
-  // ===== Kafelek bazowy =====
   function buildTile({label, selected, owned, onClick}){
     const tile = h('button',{class:`tile ${selected?'tile--selected':''} ${owned?'tile--owned':''}`, type:'button'}, label);
     if (owned) tile.appendChild(h('span',{class:'pill pill--owned'},'Posiadany'));
@@ -225,10 +229,8 @@
     return tile;
   }
 
-  // ===== Payload do quote =====
   function buildItemsPayload(){
     const items = [];
-    // Produkty główne → productId wg global.tier
     (state.catalog.mainProducts||[]).forEach(mp=>{
       if (state.selection.main.has(mp.key)) {
         const tier = state.global.tier;
@@ -236,11 +238,9 @@
         if (pid) items.push({ productId: pid, qty: 1 });
       }
     });
-    // Usługi (zwykłe)
     (state.catalog.services||[]).filter(s=>!s.qtySelectable).forEach(svc=>{
       if (state.selection.services.has(svc.key)) items.push({ productId: svc.productId, qty: 1 });
     });
-    // Dodatkowi użytkownicy — z ustawień globalnych
     const extraSvc = (state.catalog.services||[]).find(s=>s.qtySelectable);
     if (extraSvc && state.global.extraUsers>0) {
       items.push({ productId: extraSvc.productId, qty: state.global.extraUsers });
@@ -248,7 +248,6 @@
     return items;
   }
 
-  // ===== Podsumowanie =====
   function renderSummary(){
     const s = document.querySelector('.summary');
     if (!s) return;
@@ -264,37 +263,139 @@
     );
   }
 
-  // ===== Quote =====
-  async function createQuote(summaryEl){
-    const items = buildItemsPayload();
-    const discount = computeDiscount();
-    if (!items.length) { alert('Wybierz co najmniej jeden produkt lub usługę.'); return; }
-    summaryEl.classList.add('loading');
-    try{
-      const payload = {
-        companyId: state.company.id,
-        items,
-        discountPLN: discount,
-        title: `Oferta – ${state.company.properties.name}`
-      };
-      const res = await api(ep.createQuote, { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(payload) });
-      state.lastQuote = res;
-      const url = res.properties?.hs_public_url;
-      summaryEl.innerHTML='';
-      summaryEl.append(
-        h('div',{class:'ok'},'Oferta utworzona.'),
-        url ? h('a',{href:url,target:'_blank',rel:'noopener'},'Otwórz publiczny link') : h('div',{},'Publiczny link pojawi się po publikacji w HubSpot.'),
-        h('div',{},'Podgląd (API):'),
-        h('a',{href:`${ep.getQuote}?quoteId=${encodeURIComponent(res.quoteId)}`,target:'_blank'},'JSON podgląd')
+  // ===== Summary page =====
+  async function loadSummaryData(){
+    // PODMIEŃ na realne ID Waszego pipeline’u
+    const pipelineId = 'default'; // <--- TU wstaw Wasze ID!
+    const dealResp = await api(`${ep.dealByCompany}?companyId=${encodeURIComponent(state.company.id)}&pipelineId=${encodeURIComponent(pipelineId)}`);
+    state.context.deal = dealResp.deal;
+    const ownersResp = await api(ep.owners);
+    state.context.owners = ownersResp.owners || [];
+  }
+
+  function viewSummary(){
+    const w = h('div',{class:'view'});
+    w.appendChild(h('h2',{},'Podsumowanie'));
+
+    const bar = h('div',{class:'summary-bar'});
+    bar.append(
+      h('button',{class:'btn btn-secondary', onClick:()=>go('builder')},'← Wróć do kreatora'),
+      h('button',{class:'btn', onClick: async ()=>{ await loadSummaryData(); await renderQuotesList(container); }},'Odśwież')
+    );
+    w.appendChild(bar);
+
+    const dealBox = h('div',{class:'card'});
+    if (!state.context.deal) {
+      dealBox.append(h('div',{},'Brak powiązanego deala w wybranym pipeline.'));
+    } else {
+      const d = state.context.deal;
+      dealBox.append(
+        h('div',{}, `Deal: ${d.name} (ID: ${d.id})`),
+        h('div',{}, `Pipeline: ${d.pipeline} · Stage: ${d.stage}`)
       );
-    }catch(e){
-      console.error(e);
-      alert('Błąd generowania oferty: ' + e.message);
-    }finally{
-      summaryEl.classList.remove('loading');
+    }
+    w.appendChild(dealBox);
+
+    const ownerWrap = h('div',{class:'row-inline'});
+    ownerWrap.append(h('label',{},'Twórca Quote: '));
+    const ownerSelect = h('select',{class:'select'});
+    (state.context.owners||[]).forEach(o=>{
+      const opt=h('option',{value:o.id},o.name);
+      if (o.id === (state.context.deal?.ownerId || null)) opt.selected = true;
+      ownerSelect.appendChild(opt);
+    });
+    ownerWrap.appendChild(ownerSelect);
+    w.appendChild(ownerWrap);
+
+    const container = h('div',{class:'accordion'});
+    w.appendChild(container);
+
+    const cta = h('button',{class:'btn', onClick: async ()=>{
+      if (!state.context.deal) { alert('Brak deala – nie można utworzyć Quote.'); return; }
+      const items = buildItemsPayload();
+      const discount = computeDiscount();
+      if (!items.length){ alert('Wybierz produkty/usługi w kreatorze.'); return; }
+      try{
+        const payload = {
+          companyId: state.company.id,
+          dealId: state.context.deal.id,
+          ownerId: ownerSelect.value || state.context.deal.ownerId || undefined,
+          items,
+          discountPLN: discount,
+          title: `Oferta – ${state.company.properties.name}`
+        };
+        await api(ep.createQuote, { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(payload) });
+        await renderQuotesList(container);
+        alert('Quote utworzony.');
+      }catch(e){ alert('Błąd tworzenia Quote: ' + e.message); }
+    }}, 'Dodaj nowy Quote');
+    w.appendChild(cta);
+
+    $app.innerHTML='';
+    $app.appendChild(w);
+    renderQuotesList(container).catch(console.error);
+  }
+
+  async function renderQuotesList(container){
+    container.innerHTML = '';
+    if (!state.context.deal) return;
+    const listResp = await api(`${ep.quotesForDeal}?dealId=${encodeURIComponent(state.context.deal.id)}`);
+    const quotes = listResp.quotes || [];
+    if (!quotes.length){ container.append(h('div',{class:'muted'},'Brak quote’ów na tym dealu.')); return; }
+    for (const q of quotes){
+      const sect = h('details',{class:'acc-item'});
+      const sum  = h('summary',{}, `${q.name} · ${q.status}`);
+      if (q.publicUrl) sum.append(' · ', h('a',{href:q.publicUrl,target:'_blank'},'otwórz'));
+      const body = h('div',{class:'acc-body'}, h('div',{},'Ładowanie pozycji...'));
+      sect.append(sum, body);
+      container.appendChild(sect);
+
+      try{
+        const det = await api(`${ep.quoteDetails}?quoteId=${encodeURIComponent(q.id)}`);
+        const items = det.items || [];
+        body.innerHTML='';
+        if (!items.length){ body.append(h('div',{class:'muted'},'Brak pozycji.')); continue; }
+
+        const table = h('div',{class:'li-table'});
+        table.append(rowLi('Nazwa','Qty','Cena jedn.','Rabat','Suma linii', true));
+        let sumNet = 0, sumDisc = 0;
+        items.forEach(it=>{
+          sumNet += it.lineTotal;
+          sumDisc += it.discountAmount || 0;
+          const discTxt = it.discountAmount ? `-${it.discountAmount.toFixed(2)} PLN${it.discountPercent?` (${it.discountPercent}%)`:''}` : '—';
+          table.append(rowLi(
+            it.name,
+            String(it.qty),
+            (it.unitPrice||0).toFixed(2) + ' PLN',
+            discTxt,
+            (it.lineTotal||0).toFixed(2) + ' PLN'
+          ));
+        });
+        body.append(table);
+
+        const discountCalc = computeDiscount(); // nasz „pakietowy” rabat z kreatora
+        const recomp = 0; // miejsce na „rekompensatę” jeśli wprowadzicie
+        const grand = Math.max(0, sumNet - discountCalc - recomp);
+        const totals = h('div',{class:'totals'},
+          h('div',{}, `Suma pozycji: ${sumNet.toFixed(2)} PLN`),
+          h('div',{}, `Rabat pakietowy: -${discountCalc.toFixed(2)} PLN`),
+          h('div',{}, `Rekompensata: -${recomp.toFixed(2)} PLN`),
+          h('div',{class:'totals-grand'}, `Razem: ${grand.toFixed(2)} PLN`)
+        );
+        body.append(totals);
+      }catch(e){
+        body.innerHTML='';
+        body.append(h('div',{class:'muted'},'Nie udało się pobrać pozycji Quote.'));
+      }
+    }
+
+    function rowLi(a,b,c,d,e,head=false){
+      const r = h('div',{class:'li-row'+(head?' li-head':'')});
+      r.append(h('div',{},a),h('div',{},b),h('div',{},c),h('div',{},d),h('div',{},e));
+      return r;
     }
   }
 
   // start
-  viewCompanyPicker();
+  go('builder');
 })();
