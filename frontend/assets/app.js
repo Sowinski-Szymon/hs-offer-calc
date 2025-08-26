@@ -1,21 +1,9 @@
 (() => {
-  // ===== Endpoints =====
-  const base = JSON.parse(document.getElementById('app').dataset.endpoints).base;
-  const ep = {
-    search: `${base}/companies-search`,
-    owned: `${base}/company-products`,
-    overview: `${base}/company-overview`,
-    companyBilling: `${base}/company-billing`,
-    catalog: `${base}/catalog`,
-    createQuote: `${base}/create-quote`,
-    getQuote: `${base}/get-quote`,
-    dealByCompany: `${base}/deal-by-company`,
-    quotesForDeal: `${base}/deal-quotes`,
-    quoteDetails: `${base}/quote-details`,
-    owners: `${base}/owners`
-  };
+  // ===== Global singletons (ustawione w init()) =====
+  let $app = null;
+  let ep = {};   // endpoints (ustawiane po DOMContentLoaded)
 
-  // ===== Pricing =====
+  // ===== Pricing / konfiguracje stałe =====
   const PRICING_MATRIX = {
     "ePublink Budżet": { "Tier1": 6990, "Tier2": 9590, "Tier3": 11390, "Tier4": 33790 },
     "ePublink SWB":    { "Tier1": 2590, "Tier2": 2790, "Tier3": 3290, "Tier4": 3290 },
@@ -28,7 +16,6 @@
   const EXTRA_USER_PRODUCT_ID = '163198115623';
   const EXTRA_USER_PRICES = { Tier1: 590, Tier2: 690, Tier3: 890, Tier4: 990 };
 
-  // ===== Etykiety =====
   const LABELS = {
     WPF: 'ePublink WPF',
     BUDZET: 'ePublink Budżet',
@@ -38,7 +25,7 @@
   const TIER_LABEL = { Tier1: 'Solo', Tier2: 'Plus', Tier3: 'Pro', Tier4: 'Max' };
   const TIER_CODE = { Solo: 'Tier1', Plus: 'Tier2', Pro: 'Tier3', Max: 'Tier4' };
 
-  // ===== State =====
+  // ===== App State =====
   const state = {
     company: null,
     catalog: null,
@@ -50,8 +37,6 @@
     router: { page: 'builder' },
     context: { deal: null, owners: [] }
   };
-
-  const $app = document.querySelector('#app');
 
   // ===== Utils =====
   function h(tag, attrs = {}, ...children) {
@@ -66,6 +51,7 @@
     return el;
   }
   async function api(url, opts) {
+    if (!url) throw new Error('API base not configured');
     const r = await fetch(url, opts);
     if (!r.ok) throw new Error(await r.text().catch(()=>String(r.status)));
     return r.json();
@@ -89,8 +75,13 @@
 
   // ===== View 1: wybór firmy =====
   function viewCompanyPicker(){
-    const input = h('input',{class:'inp',placeholder:'Szukaj firmy (min 2 litery)'});
-    const list = h('div',{class:'list'});
+    const input = h('input',{
+      class:'inp',
+      placeholder:'Szukaj firmy (min 2 litery)',
+      style:'display:block;width:100%;max-width:640px;padding:12px 14px;border:2px solid #2b6cb0;border-radius:10px;box-sizing:border-box;margin:12px 0;outline:none;'
+    });
+    const list = h('div',{class:'list', style:'margin-top:8px;'});
+
     let t;
     input.addEventListener('input',()=> {
       const q = input.value.trim();
@@ -98,18 +89,32 @@
       t = setTimeout(async () => {
         if (q.length<2){ list.innerHTML=''; return; }
         try{
+          if (!ep.search) throw new Error('Brak endpointu search');
           const results = await api(`${ep.search}?query=${encodeURIComponent(q)}`);
           list.innerHTML = '';
           results.forEach(r=>{
-            const row = h('div',{class:'row'}, `${r.properties.name||'Bez nazwy'}${r.properties.domain?' · '+r.properties.domain:''}`);
+            const row = h('div',{class:'row', style:'padding:10px 12px;border:1px solid #e2e8f0;border-radius:8px;margin-bottom:8px;cursor:pointer;'},
+              `${r.properties.name||'Bez nazwy'}${r.properties.domain?' · '+r.properties.domain:''}`
+            );
             row.addEventListener('click',()=>pickCompany(r));
             list.appendChild(row);
           });
-        }catch(e){ console.error('companies-search', e); }
+        }catch(e){
+          console.error('companies-search', e);
+          list.innerHTML = '<div class="muted">Błąd wyszukiwania firm.</div>';
+        }
       },300);
     });
+
     $app.innerHTML='';
-    $app.append(h('div',{class:'view'}, h('h2',{},'Wybierz firmę'), input, list));
+    $app.append(
+      h('div',{class:'view'},
+        h('h2',{},'Wybierz firmę'),
+        h('div',{class:'muted', style:'margin:6px 0;'},'Zacznij pisać min. 2 znaki, aby wyszukać.'),
+        input,
+        list
+      )
+    );
   }
 
   // ===== After pick =====
@@ -117,10 +122,10 @@
     state.company = c;
     try{
       const [ownedFromDeals, catalog, overview, billing] = await Promise.all([
-        api(`${ep.owned}?companyId=${encodeURIComponent(c.id)}`),
-        api(ep.catalog),
-        api(`${ep.overview}?companyId=${encodeURIComponent(c.id)}`),
-        api(`${ep.companyBilling}?companyId=${encodeURIComponent(c.id)}`)
+        ep.owned ? api(`${ep.owned}?companyId=${encodeURIComponent(c.id)}`) : { ownedMainProducts: [] },
+        ep.catalog ? api(ep.catalog) : { mainProducts:[], services:[] },
+        ep.overview ? api(`${ep.overview}?companyId=${encodeURIComponent(c.id)}`) : { company:{}, owned:{ main:[], services:[] }},
+        ep.companyBilling ? api(`${ep.companyBilling}?companyId=${encodeURIComponent(c.id)}`) : { isPackageOnCompany:false, lastNet:{} }
       ]);
       state.catalog = catalog;
       state.overview = overview;
@@ -149,6 +154,7 @@
     }catch(e){
       console.error('pickCompany', e);
       alert('Nie udało się pobrać danych firmy.');
+      go('builder');
     }
   }
 
@@ -176,7 +182,7 @@
       SWB:    ov?.owned?.main?.find(x=>x.key==='SWB')?.nextBillingDate || ov?.company?.swb_next_billing_date
     };
 
-    const D = 364;
+    const D = 364; // wg wymagań
 
     if (isPkgOnCompany) {
       const net = Number(lastNet.package || 0);
@@ -205,13 +211,24 @@
     title.appendChild(h('span',{class:'company-tier'}, ` · ${tierNice(state.global.tier)}`));
     wrap.appendChild(title);
 
+    // przycisk powrotu do wyszukiwarki
+    const backBar = h('div',{style:'margin-bottom:12px;'},
+      h('button',{class:'btn btn-secondary', type:'button', onclick:()=>{ 
+        state.company = null;
+        state.ownedMain = new Set();
+        state.selection = { main:new Set(), services:new Set() };
+        go('builder');
+      }}, '← Wybierz inną firmę')
+    );
+    wrap.appendChild(backBar);
+
     // Obecnie posiadane — ładne etykiety + data
     if (state.overview) {
       const sec = h('div',{class:'owned'});
       sec.appendChild(h('h3',{},'Obecnie posiadane'));
       const list = h('div',{class:'owned-list'});
       (state.overview.owned?.main||[]).forEach(item=>{
-        const label = LABELS[item.key] || item.key;  // ładna etykieta
+        const label = LABELS[item.key] || item.key;
         const dateTxt = fmtDate(item.nextBillingDate);
         const row = h('div',{class:'owned-row'},
           h('span',{class:'owned-name'}, label),
@@ -393,8 +410,8 @@
 
   // ===== Summary page =====
   async function loadSummaryData(){
-    // <<< FIX: pipeline 1978057944
     const pipelineId = '1978057944';
+    if (!ep.dealByCompany || !ep.owners) return;
     const dealResp = await api(`${ep.dealByCompany}?companyId=${encodeURIComponent(state.company.id)}&pipelineId=${encodeURIComponent(pipelineId)}`);
     state.context.deal = dealResp.deal;
     const ownersResp = await api(ep.owners);
@@ -405,11 +422,21 @@
     const w = h('div',{class:'view'});
     w.appendChild(h('h2',{},'Podsumowanie'));
 
+    // powrót do wyboru firmy
+    const backBar = h('div',{style:'margin-bottom:12px;'},
+      h('button',{class:'btn btn-secondary', type:'button', onclick:()=>{ 
+        state.company = null;
+        state.ownedMain = new Set();
+        state.selection = { main:new Set(), services:new Set() };
+        go('builder');
+      }}, '← Wybierz inną firmę')
+    );
+    w.appendChild(backBar);
+
     const container = h('div',{class:'accordion'});
 
     const bar = h('div',{class:'summary-bar'});
     bar.append(
-      h('button',{class:'btn btn-secondary', type:'button', onclick:()=>go('builder')},'← Wróć do kreatora'),
       h('button',{class:'btn', type:'button', onclick: async ()=>{
         try{
           await loadSummaryData();
@@ -438,19 +465,22 @@
         : bundleDiscount(state.selection.main.size);
       if (!items.length){ alert('Wybierz produkty/usługi w kreatorze.'); return; }
       try{
-        const payload = {
-          companyId: state.company.id,
-          dealId: state.context.deal.id,
-          ownerId: ownerSelect.value || state.context.deal.ownerId || undefined,
-          items,
-          discountPLN: discount,
-          title: `Oferta – ${state.company.properties.name}`
-        };
-        await api(ep.createQuote, { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(payload) });
+        await api(ep.createQuote, {
+          method:'POST',
+          headers:{'Content-Type':'application/json'},
+          body: JSON.stringify({
+            companyId: state.company.id,
+            dealId: state.context.deal.id,
+            ownerId: ownerSelect.value || state.context.deal.ownerId || undefined,
+            items,
+            discountPLN: discount,
+            title: `Oferta – ${state.company.properties.name}`
+          })
+        });
         await renderQuotesList(container);
         alert('Quote utworzony.');
       }catch(e){ alert('Błąd tworzenia Quote: ' + e.message); }
-    }}, 'Dodaj nowy Quote'));
+    }}, 'Dodaj nowy Quote');
     w.appendChild(cta);
 
     $app.innerHTML='';
@@ -486,12 +516,12 @@
 
   function buildItemsPayload(){
     const items = [];
-    (state.catalog.mainProducts||[]).forEach(mp=>{
+    (state.catalog?.mainProducts||[]).forEach(mp=>{
       if (state.selection.main.has(mp.key)) {
         if (mp.productId) items.push({ productId: mp.productId, qty: 1 });
       }
     });
-    (state.catalog.services||[]).forEach(svc=>{
+    (state.catalog?.services||[]).forEach(svc=>{
       if (state.selection.services.has(svc.key)) {
         if (svc.productId) items.push({ productId: svc.productId, qty: 1 });
       }
@@ -505,7 +535,8 @@
 
   async function renderQuotesList(container){
     container.innerHTML = '';
-    if (!state.context.deal) return;
+    if (!state.context.deal || !ep.quotesForDeal || !ep.quoteDetails) return;
+
     let quotes = [];
     try{
       const listResp = await api(`${ep.quotesForDeal}?dealId=${encodeURIComponent(state.context.deal.id)}`);
@@ -556,6 +587,43 @@
     }
   }
 
-  // start
-  go('builder');
+  // ===== Init po DOMContentLoaded – tu ustawiamy endpoints i startujemy =====
+  function init() {
+    $app = document.getElementById('app');
+    if (!$app) {
+      console.error('[calc] Brak #app w DOM – upewnij się, że calculator.html ma <div id="app" ...>');
+      return;
+    }
+    let endpointsObj = {};
+    try {
+      const raw = $app.getAttribute('data-endpoints') || '{}';
+      endpointsObj = JSON.parse(raw);
+    } catch (e) {
+      console.warn('[calc] Nieprawidłowy JSON w data-endpoints. Używam pustej konfiguracji.');
+      endpointsObj = {};
+    }
+    const base = endpointsObj.base || endpointsObj.api || '';
+    ep = base ? {
+      search: `${base}/companies-search`,
+      owned: `${base}/company-products`,
+      overview: `${base}/company-overview`,
+      companyBilling: `${base}/company-billing`,
+      catalog: `${base}/catalog`,
+      createQuote: `${base}/create-quote`,
+      getQuote: `${base}/get-quote`,
+      dealByCompany: `${base}/deal-by-company`,
+      quotesForDeal: `${base}/deal-quotes`,
+      quoteDetails: `${base}/quote-details`,
+      owners: `${base}/owners`
+    } : {};
+
+    // Start w widoku „Wybierz firmę” – pasek zawsze się pokaże
+    go('builder');
+  }
+
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', init);
+  } else {
+    init();
+  }
 })();
