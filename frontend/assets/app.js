@@ -59,7 +59,7 @@
     for (const [k,v] of Object.entries(attrs)) {
       if (k === 'class') el.className = v;
       else if (k === 'onclick' || k === 'onchange' || k === 'oninput' || k === 'onsubmit') el.addEventListener(k.slice(2), v);
-      else if (k.startsWith('on')) el.addEventListener(k.slice(2).toLowerCase(), v); // fallback
+      else if (k.startsWith('on')) el.addEventListener(k.slice(2).toLowerCase(), v);
       else if (v !== null && v !== undefined) el.setAttribute(k, v);
     }
     children.flat().forEach(c => el.appendChild(typeof c === 'string' ? document.createTextNode(c) : c));
@@ -70,7 +70,12 @@
     if (!r.ok) throw new Error(await r.text().catch(()=>String(r.status)));
     return r.json();
   }
-  function fmtDate(val) { if (val===null||val===undefined||val==='') return '—'; const n=Number(val); const d=isNaN(n)?new Date(String(val)):new Date(n); return isNaN(d.getTime())?'—':d.toLocaleDateString('pl-PL'); }
+  function fmtDate(val) {
+    if (val===null||val===undefined||val==='') return '—';
+    const n=Number(val);
+    const d=isNaN(n)?new Date(String(val)):new Date(n);
+    return isNaN(d.getTime())?'—':d.toLocaleDateString('pl-PL');
+  }
   function money(v){ return `${Number(v||0).toFixed(2)} PLN`; }
   function bundleDiscount(c){ if(c>=4) return 900; if(c===3) return 600; if(c===2) return 300; return 0; }
   function tierNice(code){ return TIER_LABEL[code] || code; }
@@ -121,7 +126,6 @@
       state.overview = overview;
       state.billing = billing || { isPackageOnCompany:false, lastNet:{} };
 
-      // Tier z CRM (ładne nazwy) → mapuj na Tier1..4, jeśli dostępny
       if (overview?.company?.tier) {
         const crm = overview.company.tier;
         state.global.tier = TIER_CODE[crm] || state.global.tier;
@@ -131,10 +135,10 @@
       const ownedKeysFromDeals = new Set(ownedFromDeals?.ownedMainProducts||[]);
       state.ownedMain = new Set([...ownedKeysFromProps, ...ownedKeysFromDeals]);
 
-      // Pakiet domyślnie ON, jeśli firma ma ≥1 posiadany produkt
+      // Pakiet ON, jeśli firma ma ≥1 posiadany produkt
       state.global.packageMode = state.ownedMain.size > 0;
 
-      // Data startu – domyślnie dziś (yyyy-mm-dd)
+      // Data startu – dziś
       const today = new Date();
       state.global.startDate = today.toISOString().slice(0,10);
 
@@ -148,7 +152,7 @@
     }
   }
 
-  // ===== Kompensata (tylko gdy Pakiet=ON) =====
+  // ===== Kompensata (tylko przy pakiecie) =====
   function daysBetweenISO(startISO, endVal){
     if(!startISO || !endVal) return 0;
     const s = new Date(startISO+'T00:00:00');
@@ -156,9 +160,8 @@
     const diff = Math.ceil((e - s) / (1000*60*60*24));
     return Math.max(0, diff);
   }
-
   function computeCompensation(){
-    if (!state.global.packageMode) return 0; // tylko przy pakiecie
+    if (!state.global.packageMode) return 0;
     const startISO = state.global.startDate;
     if (!startISO) return 0;
 
@@ -166,7 +169,6 @@
     const lastNet = state.billing?.lastNet || {};
     const isPkgOnCompany = !!state.billing?.isPackageOnCompany;
 
-    // Daty końca subskrypcji per moduł
     const nextDates = {
       WPF:    ov?.owned?.main?.find(x=>x.key==='WPF')?.nextBillingDate || ov?.company?.wpf_next_billing_date,
       BUDZET: ov?.owned?.main?.find(x=>x.key==='BUDZET')?.nextBillingDate || ov?.company?.best_next_billing_date,
@@ -174,7 +176,6 @@
       SWB:    ov?.owned?.main?.find(x=>x.key==='SWB')?.nextBillingDate || ov?.company?.swb_next_billing_date
     };
 
-    // Dzielnik: 364 (wg Twojej specyfikacji)
     const D = 364;
 
     if (isPkgOnCompany) {
@@ -185,7 +186,6 @@
       return (net / D) * days;
     }
 
-    // Firma nie jest w pakiecie → sumuj per posiadany moduł
     let sum = 0;
     for (const key of state.ownedMain) {
       const net = Number(lastNet[key] || 0);
@@ -205,16 +205,17 @@
     title.appendChild(h('span',{class:'company-tier'}, ` · ${tierNice(state.global.tier)}`));
     wrap.appendChild(title);
 
-    // Obecnie posiadane
+    // Obecnie posiadane — ładne etykiety + data
     if (state.overview) {
       const sec = h('div',{class:'owned'});
       sec.appendChild(h('h3',{},'Obecnie posiadane'));
       const list = h('div',{class:'owned-list'});
       (state.overview.owned?.main||[]).forEach(item=>{
-        const lab = LABELS[item.key] || item.key;
+        const label = LABELS[item.key] || item.key;  // ładna etykieta
+        const dateTxt = fmtDate(item.nextBillingDate);
         const row = h('div',{class:'owned-row'},
-          h('span',{class:'owned-name'}, `${lab}`),
-          h('span',{class:'owned-date'}, `Nast. rozliczenie: ${fmtDate(item.nextBillingDate)}`)
+          h('span',{class:'owned-name'}, label),
+          h('span',{class:'owned-date'}, `Nast. rozliczenie: ${dateTxt}`)
         );
         list.appendChild(row);
       });
@@ -392,7 +393,8 @@
 
   // ===== Summary page =====
   async function loadSummaryData(){
-    const pipelineId = 'default';
+    // <<< FIX: pipeline 1978057944
+    const pipelineId = '1978057944';
     const dealResp = await api(`${ep.dealByCompany}?companyId=${encodeURIComponent(state.company.id)}&pipelineId=${encodeURIComponent(pipelineId)}`);
     state.context.deal = dealResp.deal;
     const ownersResp = await api(ep.owners);
@@ -448,19 +450,18 @@
         await renderQuotesList(container);
         alert('Quote utworzony.');
       }catch(e){ alert('Błąd tworzenia Quote: ' + e.message); }
-    }}, 'Dodaj nowy Quote');
+    }}, 'Dodaj nowy Quote'));
     w.appendChild(cta);
 
     $app.innerHTML='';
     $app.appendChild(w);
 
-    // dociągnij dane po przejściu
     (async () => {
       try{
         await loadSummaryData();
         dealBox.innerHTML = '';
         if (!state.context.deal) {
-          dealBox.append(h('div',{},'Brak powiązanego deala w pipeline „default”.'));
+          dealBox.append(h('div',{},'Brak powiązanego deala w pipeline „1978057944”.'));
         } else {
           const d = state.context.deal;
           dealBox.append(
