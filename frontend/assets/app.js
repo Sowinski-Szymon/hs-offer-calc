@@ -22,17 +22,12 @@
   const EXTRA_USER_PRICES = { Tier1: 590, Tier2: 690, Tier3: 890, Tier4: 990 };
 
   // ====== Mapy etykiet ======
-  // Klucze modułów głównych -> przyjazne nazwy
   const MAIN_LABELS_BY_KEY = {
     WPF: 'ePublink WPF',
     BUDZET: 'ePublink Budżet',
     UMOWY: 'ePublink Umowy',
     SWB: 'ePublink SWB'
   };
-  // Klucze usług -> przyjazne nazwy (na podstawie tego, co widzisz w katalogu/CRM)
-  // OBS_WPF -> Kompleksowa obsługa WPF
-  // DLUG -> Wsparcie w zakresie obsługi długu
-  // OBS_WPF_FIN -> Kompleksowa obsługa WPF wraz z rocznym wsparciem pozyskania finansowania
   const SERVICE_LABELS_BY_KEY = {
     OBS_WPF: 'Kompleksowa obsługa WPF',
     DLUG: 'Wsparcie w zakresie obsługi długu',
@@ -105,8 +100,9 @@
     const diff = Math.ceil((e - s) / (1000*60*60*24));
     return Math.max(0, diff);
   }
+
+  // kompensata – liczona TYLKO gdy Pakiet=ON; traktujemy ją jako RABAT (odejmujemy)
   function computeCompensation(){
-    // tylko jeśli pakiet włączony
     if (!state.global.packageMode) return 0;
     const startISO = state.global.startDate;
     if (!startISO) return 0;
@@ -120,7 +116,7 @@
       const packEnd = getPackEndDate();
       if (!net || !packEnd) return 0;
       const days = daysBetweenISO(startISO, packEnd);
-      return (net / D) * days;
+      return (net / D) * days; // wartość rabatu (będzie odejmowana)
     }
     let sum = 0;
     for (const key of state.ownedMain) {
@@ -130,7 +126,7 @@
       const days = daysBetweenISO(startISO, end);
       sum += (net / D) * days;
     }
-    return sum;
+    return sum; // wartość rabatu (będzie odejmowana)
   }
 
   // ====== Routing ======
@@ -145,7 +141,7 @@
   function viewCompanyPicker(){
     const input = h('input',{
       class:'inp',
-      placeholder:'Szukaj firmy (min 2 litery)',
+      placeholder:'Szukaj jednostki (min 2 litery)',
       style:'display:block;width:100%;max-width:640px;padding:12px;border:2px solid var(--brand-2);border-radius:10px;margin:12px 0;'
     });
     const list = h('div',{class:'list', style:'margin-top:8px;'});
@@ -170,7 +166,7 @@
             list.appendChild(row);
           });
         }catch(e){
-          info.textContent = 'Błąd wyszukiwania firm.';
+          info.textContent = 'Błąd wyszukiwania.';
         }
       },300);
     };
@@ -178,7 +174,7 @@
     $app.innerHTML='';
     $app.append(
       h('div',{class:'view'},
-        h('h2',{},'Wybierz firmę'),
+        h('h2',{},'Kalkulator i generator ofert'),
         input,
         info,
         list
@@ -205,7 +201,7 @@
 
       go('products');
     }catch(e){
-      alert('Nie udało się pobrać danych firmy/katalogu.');
+      alert('Nie udało się pobrać danych jednostki/katalogu.');
       go('builder');
     }
   }
@@ -222,8 +218,8 @@
   function viewProductPicker(){
     const wrap = h('div',{class:'view'});
 
-    // Tytuł z tierem
-    const title = h('h2',{}, `Firma: ${state.company.properties.name}`);
+    // Tytuł: sama nazwa (bez "Firma:")
+    const title = h('h2',{}, state.company.properties.name || '—');
     const tierChip = h('span',{class:'tier-chip'}, TIER_LABEL[state.global.tier] || state.global.tier);
     title.appendChild(tierChip);
     wrap.appendChild(title);
@@ -243,7 +239,7 @@
     sec.appendChild(list);
     wrap.appendChild(sec);
 
-    // Ustawienia globalne (nowoczesny UI)
+    // Ustawienia globalne (toggle/selekt/licznik)
     const settings = h('div',{class:'card settings'});
     settings.appendChild(h('h3',{},'Ustawienia globalne'));
 
@@ -305,7 +301,7 @@
     const svcBar = h('div',{class:'tiles'});
     (state.catalog?.services||[]).forEach(svc=>{
       const selected = state.selection.services.has(svc.key);
-      const label = SERVICE_LABELS_BY_KEY[svc.key] || svc.label || svc.key; // przyjazna nazwa
+      const label = SERVICE_LABELS_BY_KEY[svc.key] || svc.label || svc.key;
       const tile = tileBtn({
         label,
         selected,
@@ -324,14 +320,14 @@
     const summaryBox = h('div',{class:'card summary'});
     wrap.append(h('h3',{},'Podsumowanie (estymacja)'), summaryBox);
 
-    // CTA: przejście dalej
+    // CTA
     wrap.appendChild(h('button',{class:'btn btn-primary', type:'button', onclick:()=>go('summary')},'Przejdź do podsumowania'));
 
     $app.innerHTML='';
     $app.appendChild(wrap);
     renderSummaryBox();
 
-    // helpers for this view
+    // Helpers
     function renderTilesAndSummary(){
       mainBar.innerHTML = '';
       (state.catalog?.mainProducts||[]).forEach(mp=>{
@@ -376,11 +372,11 @@
       summaryBox.innerHTML = '';
       const tier = state.global.tier;
 
-      // Produkty główne – etykiety po kluczach
+      // Produkty główne – etykiety
       const selectedMainLabels = [...state.selection.main.values()].map(k => MAIN_LABELS_BY_KEY[k] || k);
       const selectedMainTotal = selectedMainLabels.reduce((s,lab)=> s + getPriceByLabel(lab, tier), 0);
 
-      // Usługi – etykiety po kluczach
+      // Usługi
       const selectedServiceLabels = [...state.selection.services.values()].map(k => SERVICE_LABELS_BY_KEY[k] || k);
       const selectedServicesTotal = selectedServiceLabels.reduce((s,lab)=> s + getPriceByLabel(lab, tier), 0);
 
@@ -389,50 +385,81 @@
       const extraUnit = Number(EXTRA_USER_PRICES[tier] || 0);
       const extraTotal= extraQty * extraUnit;
 
-      // Rabat pakietowy – TYLKO jeżeli Pakiet = ON
+      // Rabat pakietowy & kompensata – tylko przy Pakiecie
       let discount = 0;
+      let compensationDiscount = 0; // kompensata jako RABAT
       if (state.global.packageMode) {
-        const unionCount = new Set([...state.ownedMain, ...state.selection.main]).size; // posiadane + nowe
+        const unionCount = new Set([...state.ownedMain, ...state.selection.main]).size;
         discount = bundleDiscount(unionCount);
+        compensationDiscount = computeCompensation(); // wartość rabatu (odejmujemy)
       }
 
-      // Rekompsensata – tylko przy pakiecie
-      const compensation = state.global.packageMode ? computeCompensation() : 0;
+      // Netto do zapłaty
+      const netPayable = Math.max(0, selectedMainTotal + selectedServicesTotal + extraTotal - discount - compensationDiscount);
+      const vat = netPayable * 0.23;
+      const gross = netPayable + vat;
 
-      // SUMA
-      const payable = Math.max(0, selectedMainTotal + selectedServicesTotal + extraTotal - discount + compensation);
+      // Widok tabeli:
+      if (state.global.packageMode) {
+        // TYLKO pozycja i łączna kwota (bez ceny jedn., bez qty)
+        const list = h('div',{class:'li-table'});
+        list.append(rowLi2('Pozycja','Suma', true));
 
-      // Tabela pozycji (bez kompensaty/discount na liniach – one na dole)
-      const list = h('div',{class:'li-table'});
-      list.append(rowLi('Pozycja','Qty','Cena jedn.','Suma', true));
+        selectedMainLabels.forEach(lab=>{
+          const price = getPriceByLabel(lab, tier);
+          list.append(rowLi2(lab, money(price)));
+        });
+        selectedServiceLabels.forEach(lab=>{
+          const price = getPriceByLabel(lab, tier);
+          list.append(rowLi2(lab, money(price)));
+        });
+        if (extraQty>0){
+          list.append(rowLi2(`Dodatkowi użytkownicy (${extraQty})`, money(extraTotal)));
+        }
+        summaryBox.append(list);
 
-      selectedMainLabels.forEach(lab=>{
-        const price = getPriceByLabel(lab, tier);
-        list.append(rowLi(lab,'1',money(price),money(price)));
-      });
-      selectedServiceLabels.forEach(lab=>{
-        const price = getPriceByLabel(lab, tier);
-        list.append(rowLi(lab,'1',money(price),money(price)));
-      });
-      if (extraQty>0){
-        list.append(rowLi('Dodatkowi użytkownicy', String(extraQty), money(extraUnit), money(extraTotal)));
+      } else {
+        // Standardowa tabela z ceną jedn. (bez rabatów na liniach)
+        const list = h('div',{class:'li-table'});
+        list.append(rowLi4('Pozycja','Qty','Cena jedn.','Suma', true));
+        selectedMainLabels.forEach(lab=>{
+          const price = getPriceByLabel(lab, tier);
+          list.append(rowLi4(lab,'1',money(price),money(price)));
+        });
+        selectedServiceLabels.forEach(lab=>{
+          const price = getPriceByLabel(lab, tier);
+          list.append(rowLi4(lab,'1',money(price),money(price)));
+        });
+        if (extraQty>0){
+          list.append(rowLi4('Dodatkowi użytkownicy', String(extraQty), money(extraUnit), money(extraTotal)));
+        }
+        summaryBox.append(list);
       }
-      summaryBox.append(list);
 
       // Podsumowania
       const sums = h('div',{class:'totals'});
       if (state.global.packageMode) {
         sums.append(
           h('div',{}, `Rabat pakietowy: -${money(discount)}`),
-          h('div',{}, `Rekompensata: +${money(compensation)}`)
+          h('div',{}, `Rekompensata: -${money(compensationDiscount)}`)
         );
       }
-      sums.append(h('div',{class:'totals-grand'}, `Razem (est.): ${money(payable)}`));
+      sums.append(
+        h('div',{}, `Razem netto: ${money(netPayable)}`),
+        h('div',{}, `VAT 23%: ${money(vat)}`),
+        h('div',{class:'totals-grand'}, `Razem brutto: ${money(gross)}`)
+      );
       summaryBox.append(sums);
 
-      function rowLi(a,b,c,d,head=false){
+      function rowLi4(a,b,c,d,head=false){
         const r = h('div',{class:'li-row'+(head?' li-head':'')});
         r.append(h('div',{},a),h('div',{},b),h('div',{},c),h('div',{},d));
+        return r;
+      }
+      function rowLi2(a,b,head=false){
+        const r = h('div',{class:'li-row'+(head?' li-head':'')});
+        r.style.gridTemplateColumns = '1fr 160px';
+        r.append(h('div',{},a),h('div',{},b));
         return r;
       }
     }
