@@ -30,8 +30,7 @@
     ownedMain: new Set(),
     selection: { main: new Set(), services: new Set() },
     global: { packageMode: false, tier: 'Tier1', extraUsers: 0, startDate: null },
-    router: { page: 'builder' },
-    context: { deal: null, owners: [] }
+    router: { page: 'builder' }
   };
 
   function h(tag, attrs = {}, ...children) {
@@ -50,11 +49,14 @@
     if (!r.ok) throw new Error(await r.text().catch(()=>String(r.status)));
     return r.json();
   }
+
   function fmtDate(val) {
     if (!val) return '—';
-    const d = new Date(isNaN(val) ? String(val) : Number(val));
+    const n = Number(val);
+    const d = isNaN(n) ? new Date(String(val)) : new Date(n);
     return isNaN(d.getTime()) ? '—' : d.toLocaleDateString('pl-PL');
   }
+
   function money(v){ return `${Number(v||0).toFixed(2)} PLN`; }
   function bundleDiscount(c){ if(c>=4) return 900; if(c===3) return 600; if(c===2) return 300; return 0; }
   function tierNice(code){ return TIER_LABEL[code] || code; }
@@ -63,6 +65,7 @@
   function go(page){
     state.router.page = page;
     if (page === 'builder') viewCompanyPicker();
+    if (page === 'products') viewProductPicker();
     if (page === 'summary') viewSummary();
   }
 
@@ -119,18 +122,19 @@
       state.global.packageMode = state.ownedMain.size > 0;
       state.global.startDate = new Date().toISOString().slice(0,10);
 
-      viewProductPicker();
+      go('products');
     }catch(e){
       alert('Nie udało się pobrać danych firmy.');
       go('builder');
     }
   }
 
-  // Widok 2: kreator
+  // Widok 2: kreator produktów
   function viewProductPicker(){
     const wrap = h('div',{class:'view'});
     wrap.appendChild(h('h2',{}, `Firma: ${state.company.properties.name}`));
 
+    // Obecnie posiadane
     if (state.overview) {
       const sec = h('div',{class:'owned'});
       sec.appendChild(h('h3',{},'Obecnie posiadane'));
@@ -143,6 +147,7 @@
       wrap.appendChild(sec);
     }
 
+    // Pakiet
     const pkg = h('label',{}, 
       h('input',{type:'checkbox', onchange:(e)=>{ state.global.packageMode = e.target.checked; }}),
       ' Pakiet'
@@ -150,10 +155,12 @@
     pkg.querySelector('input').checked = state.global.packageMode;
     wrap.appendChild(pkg);
 
+    // Data startu
     const dateInp = h('input',{type:'date', value: state.global.startDate});
     dateInp.onchange = ()=>{ state.global.startDate = dateInp.value; };
     wrap.appendChild(h('div',{}, 'Data startu: ', dateInp));
 
+    // Tier
     const tierSel = h('select',{onchange:()=>{ state.global.tier = tierSel.value; }});
     ['Tier1','Tier2','Tier3','Tier4'].forEach(code=>{
       const opt=h('option',{value:code},tierNice(code));
@@ -162,9 +169,11 @@
     });
     wrap.appendChild(h('div',{}, 'Tier: ', tierSel));
 
+    // Extra users
     const extraInp = h('input',{type:'number',min:'0',value:String(state.global.extraUsers||0),oninput:()=>{state.global.extraUsers=Number(extraInp.value||0);} });
     wrap.appendChild(h('div',{}, 'Liczba dodatkowych użytkowników: ', extraInp));
 
+    // CTA
     wrap.appendChild(h('button',{class:'btn', type:'button', onclick:()=>go('summary')},'Przejdź do podsumowania'));
 
     $app.innerHTML='';
@@ -175,8 +184,7 @@
   function viewSummary(){
     const w = h('div',{class:'view'});
     w.appendChild(h('h2',{},'Podsumowanie'));
-    const back = h('button',{class:'btn', type:'button', onclick:()=>go('builder')},'← Wybierz inną firmę');
-    w.appendChild(back);
+    w.appendChild(h('button',{class:'btn', type:'button', onclick:()=>go('builder')},'← Wybierz inną firmę'));
     $app.innerHTML='';
     $app.appendChild(w);
   }
