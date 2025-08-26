@@ -5,6 +5,7 @@
     search: `${base}/companies-search`,
     owned: `${base}/company-products`,
     overview: `${base}/company-overview`,
+    companyBilling: `${base}/company-billing`,
     catalog: `${base}/catalog`,
     createQuote: `${base}/create-quote`,
     getQuote: `${base}/get-quote`,
@@ -14,7 +15,7 @@
     owners: `${base}/owners`
   };
 
-  // ===== Pricing (z Twojej macierzy) =====
+  // ===== Pricing =====
   const PRICING_MATRIX = {
     "ePublink Budżet": { "Tier1": 6990, "Tier2": 9590, "Tier3": 11390, "Tier4": 33790 },
     "ePublink SWB":    { "Tier1": 2590, "Tier2": 2790, "Tier3": 3290, "Tier4": 3290 },
@@ -24,7 +25,6 @@
     "Wsparcie w zakresie obsługi długu": { "Tier1": 12610, "Tier2": 12610, "Tier3": 12610, "Tier4": 12610 },
     "Kompleksowa obsługa WPF wraz z rocznym wsparciem pozyskania finansowania": { "Tier1": 26010, "Tier2": 24010, "Tier3": 21910, "Tier4": 1 }
   };
-  // Dodatkowi użytkownicy – cennik per tier + productId
   const EXTRA_USER_PRODUCT_ID = '163198115623';
   const EXTRA_USER_PRICES = { Tier1: 590, Tier2: 690, Tier3: 890, Tier4: 990 };
 
@@ -43,10 +43,11 @@
     company: null,
     catalog: null,
     overview: null,
-    ownedMain: new Set(),                               // WPF/BUDZET/UMOWY/SWB
+    ownedMain: new Set(),
     selection: { main: new Set(), services: new Set() },
-    global: { packageMode: false, tier: 'Tier1', extraUsers: 0 }, // packageMode ustalimy po fetchu
-    router: { page: 'builder' },                        // 'builder' | 'summary'
+    global: { packageMode: false, tier: 'Tier1', extraUsers: 0, startDate: null },
+    billing: { isPackageOnCompany: false, lastNet: {} },
+    router: { page: 'builder' },
     context: { deal: null, owners: [] }
   };
 
@@ -57,7 +58,8 @@
     const el = document.createElement(tag);
     for (const [k,v] of Object.entries(attrs)) {
       if (k === 'class') el.className = v;
-      else if (k.startsWith('on')) el.addEventListener(k.slice(2), v);
+      else if (k === 'onclick' || k === 'onchange' || k === 'oninput' || k === 'onsubmit') el.addEventListener(k.slice(2), v);
+      else if (k.startsWith('on')) el.addEventListener(k.slice(2).toLowerCase(), v); // fallback
       else if (v !== null && v !== undefined) el.setAttribute(k, v);
     }
     children.flat().forEach(c => el.appendChild(typeof c === 'string' ? document.createTextNode(c) : c));
@@ -109,26 +111,32 @@
   async function pickCompany(c){
     state.company = c;
     try{
-      const [ownedFromDeals, catalog, overview] = await Promise.all([
+      const [ownedFromDeals, catalog, overview, billing] = await Promise.all([
         api(`${ep.owned}?companyId=${encodeURIComponent(c.id)}`),
         api(ep.catalog),
-        api(`${ep.overview}?companyId=${encodeURIComponent(c.id)}`)
+        api(`${ep.overview}?companyId=${encodeURIComponent(c.id)}`),
+        api(`${ep.companyBilling}?companyId=${encodeURIComponent(c.id)}`)
       ]);
       state.catalog = catalog;
       state.overview = overview;
+      state.billing = billing || { isPackageOnCompany:false, lastNet:{} };
 
-      // Tier z CRM jeśli trzymacie ładne nazwy -> zmapuj; inaczej zostanie Tier1..4
+      // Tier z CRM (ładne nazwy) → mapuj na Tier1..4, jeśli dostępny
       if (overview?.company?.tier) {
-        const crm = overview.company.tier; // np. "Solo"
-        state.global.tier = TIER_CODE[crm] ? TIER_CODE[crm] : (TIER_LABEL[crm] ? crm : state.global.tier);
+        const crm = overview.company.tier;
+        state.global.tier = TIER_CODE[crm] || state.global.tier;
       }
 
       const ownedKeysFromProps = new Set((overview?.owned?.main||[]).map(x=>x.key));
       const ownedKeysFromDeals = new Set(ownedFromDeals?.ownedMainProducts||[]);
       state.ownedMain = new Set([...ownedKeysFromProps, ...ownedKeysFromDeals]);
 
-      // Domyślnie: Pakiet = ON, jeśli firma ma co najmniej 1 posiadany produkt
+      // Pakiet domyślnie ON, jeśli firma ma ≥1 posiadany produkt
       state.global.packageMode = state.ownedMain.size > 0;
+
+      // Data startu – domyślnie dziś (yyyy-mm-dd)
+      const today = new Date();
+      state.global.startDate = today.toISOString().slice(0,10);
 
       state.selection = { main: new Set(), services: new Set() };
       state.global.extraUsers = 0;
@@ -140,30 +148,53 @@
     }
   }
 
-  // ===== Kalkulacja estymacji (tylko gdy Pakiet=OFF) =====
-  function calcPricingEstimation(){
-    const tier = state.global.tier;
+  // ===== Kompensata (tylko gdy Pakiet=ON) =====
+  function daysBetweenISO(startISO, endVal){
+    if(!startISO || !endVal) return 0;
+    const s = new Date(startISO+'T00:00:00');
+    const e = typeof endVal==='number' ? new Date(endVal) : new Date(String(endVal));
+    const diff = Math.ceil((e - s) / (1000*60*60*24));
+    return Math.max(0, diff);
+  }
 
-    const selectedMainLabels = [...state.selection.main.values()].map(k => LABELS[k] || k);
-    const selectedMainTotal = selectedMainLabels.reduce((s,lab)=> s + getPrice(lab, tier), 0);
+  function computeCompensation(){
+    if (!state.global.packageMode) return 0; // tylko przy pakiecie
+    const startISO = state.global.startDate;
+    if (!startISO) return 0;
 
-    const selectedServicesLabels = [...state.selection.services.values()]; // usługi w LABELS już są po labelu
-    const selectedServicesTotal = selectedServicesLabels.reduce((s,lab)=> s + getPrice(lab, tier), 0);
+    const ov = state.overview || {};
+    const lastNet = state.billing?.lastNet || {};
+    const isPkgOnCompany = !!state.billing?.isPackageOnCompany;
 
-    const extraUsersQty = Number(state.global.extraUsers || 0);
-    const extraUsersUnit = Number(EXTRA_USER_PRICES[tier] || 0);
-    const extraUsersTotal = extraUsersQty * extraUsersUnit;
-
-    const discount = bundleDiscount(state.selection.main.size); // przy Pakiet=OFF liczymy tylko od nowych
-
-    const payable = Math.max(0, selectedMainTotal + selectedServicesTotal + extraUsersTotal - discount);
-
-    return {
-      selectedMainLabels, selectedMainTotal,
-      selectedServicesLabels, selectedServicesTotal,
-      extraUsersQty, extraUsersUnit, extraUsersTotal,
-      discount, payable
+    // Daty końca subskrypcji per moduł
+    const nextDates = {
+      WPF:    ov?.owned?.main?.find(x=>x.key==='WPF')?.nextBillingDate || ov?.company?.wpf_next_billing_date,
+      BUDZET: ov?.owned?.main?.find(x=>x.key==='BUDZET')?.nextBillingDate || ov?.company?.best_next_billing_date,
+      UMOWY:  ov?.owned?.main?.find(x=>x.key==='UMOWY')?.nextBillingDate || ov?.company?.umowy_next_billing_date,
+      SWB:    ov?.owned?.main?.find(x=>x.key==='SWB')?.nextBillingDate || ov?.company?.swb_next_billing_date
     };
+
+    // Dzielnik: 364 (wg Twojej specyfikacji)
+    const D = 364;
+
+    if (isPkgOnCompany) {
+      const net = Number(lastNet.package || 0);
+      const packEnd = ov?.company?.packNextBillingDate || ov?.company?.pack_next_billing_date || null;
+      if (!net || !packEnd) return 0;
+      const days = daysBetweenISO(startISO, packEnd);
+      return (net / D) * days;
+    }
+
+    // Firma nie jest w pakiecie → sumuj per posiadany moduł
+    let sum = 0;
+    for (const key of state.ownedMain) {
+      const net = Number(lastNet[key] || 0);
+      const end = nextDates[key];
+      if (!net || !end) continue;
+      const days = daysBetweenISO(startISO, end);
+      sum += (net / D) * days;
+    }
+    return sum;
   }
 
   // ===== View 2: kreator =====
@@ -171,7 +202,6 @@
     const wrap = h('div',{class:'view'});
 
     const title = h('h2',{}, `Firma: ${state.company.properties.name}`);
-    // Po prostu "Solo/Plus/Pro/Max"
     title.appendChild(h('span',{class:'company-tier'}, ` · ${tierNice(state.global.tier)}`));
     wrap.appendChild(title);
 
@@ -198,11 +228,21 @@
     settings.appendChild(h('h3',{},'Ustawienia globalne'));
 
     // Pakiet
-    const pkg = h('label',{class:'pkg'},
-      (()=>{ const inp=h('input',{type:'checkbox'}); inp.checked = state.global.packageMode; inp.addEventListener('change',e=>{ state.global.packageMode = e.target.checked; renderSummary(); }); return inp; })(),
-      ' Pakiet (licz rabat od posiadanych + nowych)'
-    );
+    const pkg = h('label',{class:'pkg'});
+    const pkgInp = h('input',{type:'checkbox'});
+    pkgInp.checked = state.global.packageMode;
+    pkgInp.addEventListener('change', (e)=>{ state.global.packageMode = e.target.checked; renderSummary(); });
+    pkg.appendChild(pkgInp);
+    pkg.appendChild(document.createTextNode(' Pakiet (licz rabat od posiadanych + nowych)'));
     settings.appendChild(pkg);
+
+    // Data startu
+    const dateWrap = h('div',{class:'row-inline'});
+    dateWrap.append(h('label',{}, 'Data startu:'));
+    const dateInp = h('input',{type:'date', value: state.global.startDate || ''});
+    dateInp.addEventListener('change', ()=>{ state.global.startDate = dateInp.value || null; renderSummary(); });
+    dateWrap.appendChild(dateInp);
+    settings.appendChild(dateWrap);
 
     // Tier
     const tierWrap = h('div',{class:'row-inline'});
@@ -213,7 +253,7 @@
       if (code===state.global.tier) opt.selected=true;
       tierSel.appendChild(opt);
     });
-    tierSel.addEventListener('change',()=>{ state.global.tier = tierSel.value; renderSummary(); });
+    tierSel.addEventListener('change', ()=>{ state.global.tier = tierSel.value; renderSummary(); });
     tierWrap.appendChild(tierSel);
     settings.appendChild(tierWrap);
 
@@ -221,7 +261,7 @@
     const extraWrap = h('div',{class:'row-inline'});
     extraWrap.append(h('label',{}, 'Liczba dodatkowych użytkowników:'));
     const extraInp = h('input',{type:'number',min:'0',value:String(state.global.extraUsers||0),class:'qty'});
-    extraInp.addEventListener('change',()=>{ const v = Number(extraInp.value||0); state.global.extraUsers = Math.max(0, v); renderSummary(); });
+    extraInp.addEventListener('input', ()=>{ const v = Number(extraInp.value||0); state.global.extraUsers = Math.max(0, v); renderSummary(); });
     extraWrap.appendChild(extraInp);
     settings.appendChild(extraWrap);
 
@@ -236,7 +276,7 @@
         label: LABELS[mp.key] || mp.key,
         selected: isOwned || isSelected,
         owned: isOwned,
-        onClick: () => {
+        onclick: () => {
           if (isOwned) return;
           if (state.selection.main.has(mp.key)) state.selection.main.delete(mp.key);
           else state.selection.main.add(mp.key);
@@ -255,7 +295,7 @@
         label: svc.label,
         selected,
         owned: false,
-        onClick: () => {
+        onclick: () => {
           if (selected) state.selection.services.delete(svc.key);
           else state.selection.services.add(svc.key);
           viewProductPicker();
@@ -265,19 +305,12 @@
     });
     wrap.append(h('h3',{},'Usługi'), svcTiles);
 
-    // Podsumowanie (na kreatorze):
-    // - jeśli Pakiet=ON -> ukrywamy ceny per moduł (pokazujemy notkę)
-    // - jeśli Pakiet=OFF -> pokazujemy ceny per moduł/usługę + extraUsers + rabat (tylko nowe)
+    // Podsumowanie (na kreatorze)
     const summaryBox = h('div',{class:'summary'});
     wrap.append(h('h3',{},'Podsumowanie (estymacja)'), summaryBox);
 
-    // CTA: Przejdź do podsumowania (nawigacja NIGDY się nie blokuje)
-    const toSummary = h('button',{
-      class:'btn btn-secondary', type:'button',
-      onClick: ()=>{
-        go('summary'); // natychmiastowa nawigacja
-      }
-    }, 'Przejdź do podsumowania');
+    // CTA: Przejdź do podsumowania
+    const toSummary = h('button',{ class:'btn btn-secondary', type:'button', onclick: ()=>{ go('summary'); } }, 'Przejdź do podsumowania');
     wrap.append(toSummary);
 
     $app.innerHTML='';
@@ -285,11 +318,10 @@
     renderSummary();
   }
 
-  function buildTile({label, selected, owned, onClick}){
-    const tile = h('button',{class:`tile ${selected?'tile--selected':''} ${owned?'tile--owned':''}`, type:'button'}, label);
+  function buildTile({label, selected, owned, onclick}){
+    const tile = h('button',{class:`tile ${selected?'tile--selected':''} ${owned?'tile--owned':''}`, type:'button', onclick}, label);
     if (owned) tile.appendChild(h('span',{class:'pill pill--owned'},'Posiadany'));
     else if (selected) tile.appendChild(h('span',{class:'pill pill--selected'},'Wybrany'));
-    if (!owned) tile.addEventListener('click', onClick);
     return tile;
   }
 
@@ -299,34 +331,55 @@
     if (!box) return;
     box.innerHTML = '';
 
+    const tier = state.global.tier;
+    const selectedMainLabels = [...state.selection.main.values()].map(k => LABELS[k] || k);
+    const selectedMainTotal = selectedMainLabels.reduce((s,lab)=> s + getPrice(lab, tier), 0);
+    const selectedServicesLabels = [...state.selection.services.values()];
+    const selectedServicesTotal = selectedServicesLabels.reduce((s,lab)=> s + getPrice(lab, tier), 0);
+    const extraUsersQty = Number(state.global.extraUsers || 0);
+    const extraUsersUnit = Number(EXTRA_USER_PRICES[tier] || 0);
+    const extraUsersTotal = extraUsersQty * extraUsersUnit;
+
     if (state.global.packageMode) {
-      box.append(
-        h('div',{class:'muted'}, 'Tryb „Pakiet” włączony – ceny per moduł są ukryte. Rabat naliczymy przy tworzeniu oferty.')
+      const unionCount = new Set([...state.ownedMain, ...state.selection.main]).size;
+      const discount = bundleDiscount(unionCount);
+      const compensation = computeCompensation();
+      const payable = Math.max(0, selectedMainTotal + selectedServicesTotal + extraUsersTotal - discount + compensation);
+
+      const totals = h('div',{class:'totals'},
+        h('div',{}, `Nowe moduły (łącznie): ${money(selectedMainTotal)}`),
+        h('div',{}, `Usługi (łącznie): ${money(selectedServicesTotal)}`),
+        h('div',{}, `Dodatkowi użytkownicy: ${extraUsersQty} × ${money(extraUsersUnit)} = ${money(extraUsersTotal)}`),
+        h('div',{}, `Rabat pakietowy: -${money(discount)}`),
+        h('div',{}, `Rekompensata: +${money(compensation)}`),
+        h('div',{class:'totals-grand'}, `Razem (est.): ${money(payable)}`)
       );
+      box.append(totals);
       return;
     }
 
-    const p = calcPricingEstimation();
-
+    // Pakiet OFF -> rozbicie
     const list = h('div', { class: 'li-table' });
     list.append(rowLi('Pozycja', 'Qty', 'Cena jedn.', 'Rabat', 'Suma', true));
 
-    p.selectedMainLabels.forEach(lab=>{
-      const price = getPrice(lab, state.global.tier);
+    selectedMainLabels.forEach(lab=>{
+      const price = getPrice(lab, tier);
       list.append(rowLi(lab, '1', money(price), '—', money(price)));
     });
-    p.selectedServicesLabels.forEach(lab=>{
-      const price = getPrice(lab, state.global.tier);
+    selectedServicesLabels.forEach(lab=>{
+      const price = getPrice(lab, tier);
       list.append(rowLi(lab, '1', money(price), '—', money(price)));
     });
-    if (p.extraUsersQty > 0){
-      list.append(rowLi('Dodatkowi użytkownicy', String(p.extraUsersQty), money(p.extraUsersUnit), '—', money(p.extraUsersTotal)));
+    if (extraUsersQty > 0){
+      list.append(rowLi('Dodatkowi użytkownicy', String(extraUsersQty), money(extraUsersUnit), '—', money(extraUsersTotal)));
     }
     box.append(list);
 
+    const discount = bundleDiscount(state.selection.main.size);
+    const payable = Math.max(0, selectedMainTotal + selectedServicesTotal + extraUsersTotal - discount);
     const sums = h('div',{class:'totals'},
-      h('div',{}, `Rabat pakietowy (tylko nowe): -${money(p.discount)}`),
-      h('div',{class:'totals-grand'}, `Razem (est.): ${money(p.payable)}`)
+      h('div',{}, `Rabat pakietowy (tylko nowe): -${money(discount)}`),
+      h('div',{class:'totals-grand'}, `Razem (est.): ${money(payable)}`)
     );
     box.append(sums);
 
@@ -350,13 +403,12 @@
     const w = h('div',{class:'view'});
     w.appendChild(h('h2',{},'Podsumowanie'));
 
-    // kontener na listę quote'ów tworzę od razu
     const container = h('div',{class:'accordion'});
 
     const bar = h('div',{class:'summary-bar'});
     bar.append(
-      h('button',{class:'btn btn-secondary', type:'button', onClick:()=>go('builder')},'← Wróć do kreatora'),
-      h('button',{class:'btn', type:'button', onClick: async ()=>{
+      h('button',{class:'btn btn-secondary', type:'button', onclick:()=>go('builder')},'← Wróć do kreatora'),
+      h('button',{class:'btn', type:'button', onclick: async ()=>{
         try{
           await loadSummaryData();
           await renderQuotesList(container);
@@ -376,7 +428,7 @@
 
     w.appendChild(container);
 
-    const cta = h('button',{class:'btn', type:'button', onClick: async ()=>{
+    const cta = h('button',{class:'btn', type:'button', onclick: async ()=>{
       if (!state.context.deal) { alert('Brak deala – nie można utworzyć Quote.'); return; }
       const items = buildItemsPayload();
       const discount = state.global.packageMode
@@ -402,11 +454,10 @@
     $app.innerHTML='';
     $app.appendChild(w);
 
-    // dociągnięcie danych dopiero po przejściu (nie blokuje nawigacji)
+    // dociągnij dane po przejściu
     (async () => {
       try{
         await loadSummaryData();
-        // dealBox
         dealBox.innerHTML = '';
         if (!state.context.deal) {
           dealBox.append(h('div',{},'Brak powiązanego deala w pipeline „default”.'));
@@ -417,14 +468,12 @@
             h('div',{}, `Pipeline: ${d.pipeline} · Stage: ${d.stage}`)
           );
         }
-        // owners
         ownerSelect.innerHTML = '';
         (state.context.owners||[]).forEach(o=>{
           const opt=h('option',{value:o.id},o.name);
           if (o.id === (state.context.deal?.ownerId || null)) opt.selected = true;
           ownerSelect.appendChild(opt);
         });
-        // quotes
         await renderQuotesList(container);
       }catch(e){
         console.warn('initial summary load error:', e?.message||e);
@@ -448,7 +497,7 @@
     });
     const extraUsers = Number(state.global.extraUsers||0);
     if (extraUsers > 0) {
-      items.push({ productId: '163198115623', qty: extraUsers });
+      items.push({ productId: EXTRA_USER_PRODUCT_ID, qty: extraUsers });
     }
     return items;
   }
