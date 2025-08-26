@@ -1,4 +1,4 @@
-// /api/company-billing.js
+// /api/company-billing
 const { withCORS } = require('./_lib/cors');
 const { hsFetch } = require('./_lib/hs');
 
