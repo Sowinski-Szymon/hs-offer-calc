@@ -2,36 +2,51 @@
   // ====== Globals ======
   let $app = null;
   let ep = {};
-  let lastError = '';
 
-  // ====== Pricing ======
+  // ====== Pricing (produkty + usługi) ======
   const PRICING_MATRIX = {
+    // Produkty główne
     "ePublink Budżet": { "Tier1": 6990, "Tier2": 9590, "Tier3": 11390, "Tier4": 33790 },
     "ePublink SWB":    { "Tier1": 2590, "Tier2": 2790, "Tier3": 3290, "Tier4": 3290 },
     "ePublink Umowy":  { "Tier1": 3490, "Tier2": 4490, "Tier3": 7990, "Tier4": 22990 },
     "ePublink WPF":    { "Tier1": 3390, "Tier2": 5390, "Tier3": 7490, "Tier4": 21990 },
+
+    // Usługi
     "Kompleksowa obsługa WPF": { "Tier1": 10010, "Tier2": 8010, "Tier3": 5910, "Tier4": 1 },
     "Wsparcie w zakresie obsługi długu": { "Tier1": 12610, "Tier2": 12610, "Tier3": 12610, "Tier4": 12610 },
     "Kompleksowa obsługa WPF wraz z rocznym wsparciem pozyskania finansowania": { "Tier1": 26010, "Tier2": 24010, "Tier3": 21910, "Tier4": 1 }
   };
+
+  // Dodatkowi użytkownicy (per 1 szt.)
   const EXTRA_USER_PRODUCT_ID = '163198115623';
   const EXTRA_USER_PRICES = { Tier1: 590, Tier2: 690, Tier3: 890, Tier4: 990 };
 
-  // ====== Labels ======
-  const LABELS = {
+  // ====== Mapy etykiet ======
+  // Klucze modułów głównych -> przyjazne nazwy
+  const MAIN_LABELS_BY_KEY = {
     WPF: 'ePublink WPF',
     BUDZET: 'ePublink Budżet',
     UMOWY: 'ePublink Umowy',
     SWB: 'ePublink SWB'
   };
+  // Klucze usług -> przyjazne nazwy (na podstawie tego, co widzisz w katalogu/CRM)
+  // OBS_WPF -> Kompleksowa obsługa WPF
+  // DLUG -> Wsparcie w zakresie obsługi długu
+  // OBS_WPF_FIN -> Kompleksowa obsługa WPF wraz z rocznym wsparciem pozyskania finansowania
+  const SERVICE_LABELS_BY_KEY = {
+    OBS_WPF: 'Kompleksowa obsługa WPF',
+    DLUG: 'Wsparcie w zakresie obsługi długu',
+    OBS_WPF_FIN: 'Kompleksowa obsługa WPF wraz z rocznym wsparciem pozyskania finansowania'
+  };
+
   const TIER_LABEL = { Tier1: 'Solo', Tier2: 'Plus', Tier3: 'Pro', Tier4: 'Max' };
 
   // ====== State ======
   const state = {
     company: null,
     catalog: { mainProducts: [], services: [] },
-    overview: null,               // { company, owned:{main,services}, companyDates? }
-    billing: { isPackageOnCompany:false, lastNet:{} }, // z /company-billing (opcjonalny)
+    overview: null,               // { company, owned:{main,services} }
+    billing: { isPackageOnCompany:false, lastNet:{} }, // opcjonalny endpoint
     ownedMain: new Set(),         // klucze: WPF/BUDZET/UMOWY/SWB
     selection: { main: new Set(), services: new Set() },
     global: { packageMode: false, tier: 'Tier1', extraUsers: 0, startDate: null },
@@ -43,13 +58,12 @@
     const el = document.createElement(tag);
     for (const [k,v] of Object.entries(attrs)) {
       if (k === 'class') el.className = v;
-      else if (k === 'onclick' || k === 'onchange' || k === 'oninput') el[k] = v; // tylko małe litery
+      else if (k === 'onclick' || k === 'onchange' || k === 'oninput') el[k] = v; // małe litery
       else if (v !== null && v !== undefined) el.setAttribute(k, v);
     }
     children.flat().forEach(c => el.appendChild(typeof c === 'string' ? document.createTextNode(c) : c));
     return el;
   }
-
   async function api(url, opts) {
     const r = await fetch(url, opts);
     if (!r.ok) {
@@ -58,47 +72,31 @@
     }
     return r.json();
   }
-
   function fmtDate(val) {
     if (val === null || val === undefined || val === '') return '—';
     const n = Number(val);
-    const d = isNaN(n) ? new Date(String(val)) : new Date(n); // HubSpot date/datetime → ms string
+    const d = isNaN(n) ? new Date(String(val)) : new Date(n); // HubSpot -> ms string
     return isNaN(d.getTime()) ? '—' : d.toLocaleDateString('pl-PL');
   }
-
   function money(v){ return `${Number(v||0).toFixed(2)} PLN`; }
   function bundleDiscount(c){ if(c>=4) return 900; if(c===3) return 600; if(c===2) return 300; return 0; }
-  function getPrice(label, tier){ const m=PRICING_MATRIX[label]; return m ? Number(m[tier]||0) : 0; }
+  function getPriceByLabel(label, tier){ const m=PRICING_MATRIX[label]; return m ? Number(m[tier]||0) : 0; }
 
-  function go(page){
-    state.router.page = page;
-    if (page === 'builder') viewCompanyPicker();
-    if (page === 'products') viewProductPicker();
-    if (page === 'summary') viewSummary();
-  }
-
-  // ====== Dates helpers (twarde internale) ======
-  // Szuka w kolejności: owned.main[].nextBillingDate → overview.companyDates → surowe company.*
+  // ====== Daty (internale) ======
   function getOwnedEndDate(key){
     const fromList = (state.overview?.owned?.main || []).find(x => x.key === key)?.nextBillingDate;
     if (fromList) return fromList;
-
-    const cd = state.overview?.companyDates;
-    if (cd && cd[key]) return cd[key];
-
     const c = state.overview?.company || {};
     if (key === 'WPF')    return c.wpf_next_billing_date || null;
-    if (key === 'BUDZET') return c.best_next_billing_date || null; // exact internal
+    if (key === 'BUDZET') return c.best_next_billing_date || null;
     if (key === 'UMOWY')  return c.umowy_next_billing_date || null;
     if (key === 'SWB')    return c.swb_next_billing_date || null;
     return null;
   }
   function getPackEndDate(){
     const c = state.overview?.company || {};
-    return c.pack_next_billing_date || null; // exact internal
+    return c.pack_next_billing_date || null;
   }
-
-  // ====== Compensation ======
   function daysBetweenISO(startISO, endVal){
     if(!startISO || !endVal) return 0;
     const s = new Date(startISO+'T00:00:00');
@@ -107,9 +105,8 @@
     const diff = Math.ceil((e - s) / (1000*60*60*24));
     return Math.max(0, diff);
   }
-
-  // kompensata liczona TYLKO gdy Pakiet=ON
   function computeCompensation(){
+    // tylko jeśli pakiet włączony
     if (!state.global.packageMode) return 0;
     const startISO = state.global.startDate;
     if (!startISO) return 0;
@@ -125,7 +122,6 @@
       const days = daysBetweenISO(startISO, packEnd);
       return (net / D) * days;
     }
-
     let sum = 0;
     for (const key of state.ownedMain) {
       const net = Number(lastNet[key] || 0);
@@ -137,15 +133,23 @@
     return sum;
   }
 
-  // ====== View: Company picker ======
+  // ====== Routing ======
+  function go(page){
+    state.router.page = page;
+    if (page === 'builder') viewCompanyPicker();
+    if (page === 'products') viewProductPicker();
+    if (page === 'summary') viewSummary();
+  }
+
+  // ====== Widok 1: wybór firmy ======
   function viewCompanyPicker(){
     const input = h('input',{
       class:'inp',
       placeholder:'Szukaj firmy (min 2 litery)',
-      style:'display:block;width:100%;max-width:640px;padding:12px;border:2px solid #2b6cb0;border-radius:8px;margin:12px 0;'
+      style:'display:block;width:100%;max-width:640px;padding:12px;border:2px solid var(--brand-2);border-radius:10px;margin:12px 0;'
     });
     const list = h('div',{class:'list', style:'margin-top:8px;'});
-    const info = h('div',{class:'muted', style:'color:#475569;'}, 'Zacznij pisać – minimum 2 znaki.');
+    const info = h('div',{class:'muted'}, 'Zacznij pisać – minimum 2 znaki.');
 
     let t;
     input.oninput = ()=> {
@@ -158,9 +162,9 @@
           list.innerHTML = '';
           info.textContent = results.length ? '' : 'Brak wyników.';
           results.forEach(r=>{
-            const row = h('div',{class:'row', style:'padding:10px;border:1px solid #e2e8f0;border-radius:8px;margin-bottom:8px;cursor:pointer;display:flex;justify-content:space-between;'},
-              h('span',{}, r.properties.name||'Bez nazwy'),
-              h('span',{style:'color:#64748b;'}, r.properties.domain||'')
+            const row = h('div',{class:'row row-click'},
+              h('div',{class:'row-title'}, r.properties.name||'Bez nazwy'),
+              h('div',{class:'row-sub'}, r.properties.domain||'')
             );
             row.onclick = ()=>pickCompany(r);
             list.appendChild(row);
@@ -182,7 +186,7 @@
     );
   }
 
-  // ====== After company picked ======
+  // ====== Po wyborze firmy ======
   async function pickCompany(c){
     state.company = c;
     try{
@@ -206,59 +210,73 @@
     }
   }
 
-  // ====== View: Product picker ======
+  // ====== Kafel (tile) ======
+  function tileBtn({label, selected, owned, onclick}){
+    const b = h('button',{class:`tile ${selected?'tile--selected':''} ${owned?'tile--owned':''}`, type:'button', onclick}, label);
+    if (owned) b.appendChild(h('span',{class:'pill pill--owned'},'Posiadany'));
+    else if (selected) b.appendChild(h('span',{class:'pill pill--selected'},'Wybrany'));
+    return b;
+  }
+
+  // ====== Widok 2: kreator produktów ======
   function viewProductPicker(){
     const wrap = h('div',{class:'view'});
 
-    // Tytuł
-    wrap.appendChild(h('h2',{}, `Firma: ${state.company.properties.name}`));
+    // Tytuł z tierem
+    const title = h('h2',{}, `Firma: ${state.company.properties.name}`);
+    const tierChip = h('span',{class:'tier-chip'}, TIER_LABEL[state.global.tier] || state.global.tier);
+    title.appendChild(tierChip);
+    wrap.appendChild(title);
 
-    // Posiadane (ładne etykiety + daty)
-    const sec = h('div',{class:'owned'});
+    // Posiadane (etykieta + data)
+    const sec = h('div',{class:'owned card'});
     sec.appendChild(h('h3',{},'Obecnie posiadane'));
     const list = h('div',{class:'owned-list'});
     (state.overview?.owned?.main||[]).forEach(item=>{
-      const label = LABELS[item.key] || item.key;
+      const label = MAIN_LABELS_BY_KEY[item.key] || item.key;
       list.appendChild(h('div',{class:'owned-row'},
         h('span',{}, label),
-        h('span',{style:'color:#64748b;'}, fmtDate(getOwnedEndDate(item.key)))
+        h('span',{class:'owned-date'}, fmtDate(getOwnedEndDate(item.key)))
       ));
     });
     if (!list.children.length) list.appendChild(h('div',{class:'muted'},'Brak posiadanych produktów w CRM.'));
     sec.appendChild(list);
     wrap.appendChild(sec);
 
-    // Ustawienia globalne
-    const settings = h('div',{class:'settings'});
+    // Ustawienia globalne (nowoczesny UI)
+    const settings = h('div',{class:'card settings'});
     settings.appendChild(h('h3',{},'Ustawienia globalne'));
 
-    // Pakiet
-    const pkgLbl = h('label',{style:'display:flex;gap:8px;align-items:center;'},
+    // Pakiet – toggle
+    const toggle = h('label',{class:'switch'},
       h('input',{type:'checkbox', onchange:(e)=>{ state.global.packageMode = e.target.checked; renderSummaryBox(); }}),
-      ' Pakiet (rabat liczony od posiadanych + nowych)'
+      h('span',{class:'slider'}),
+      h('span',{class:'switch-label'},'Pakiet (rabat liczony od posiadanych + nowych)')
     );
-    pkgLbl.querySelector('input').checked = state.global.packageMode;
-    settings.appendChild(pkgLbl);
+    toggle.querySelector('input').checked = state.global.packageMode;
+    settings.appendChild(toggle);
 
     // Data startu
-    const dateRow = h('div',{style:'margin:6px 0;display:flex;gap:8px;align-items:center;'},
-      h('span',{},'Data startu:'),
+    const dateRow = h('div',{class:'form-row'},
+      h('label',{},'Data startu'),
       h('input',{type:'date', value: state.global.startDate, onchange:(e)=>{ state.global.startDate = e.target.value; renderSummaryBox(); }})
     );
     settings.appendChild(dateRow);
 
     // Tier
-    const tierSel = h('select',{onchange:(e)=>{ state.global.tier = e.target.value; renderSummaryBox(); }});
+    const tierSel = h('select',{class:'select', onchange:(e)=>{ state.global.tier = e.target.value; tierChip.textContent = TIER_LABEL[state.global.tier] || state.global.tier; renderSummaryBox(); }});
     ['Tier1','Tier2','Tier3','Tier4'].forEach(code=>{
       const opt=h('option',{value:code}, TIER_LABEL[code]);
       if (code===state.global.tier) opt.selected=true;
       tierSel.appendChild(opt);
     });
-    settings.appendChild(h('div',{}, 'Tier: ', tierSel));
+    const tierRow = h('div',{class:'form-row'}, h('label',{},'Tier'), tierSel);
+    settings.appendChild(tierRow);
 
     // Dodatkowi użytkownicy
     const extraInp = h('input',{type:'number',min:'0',value:String(state.global.extraUsers||0),oninput:(e)=>{ state.global.extraUsers=Number(e.target.value||0); renderSummaryBox(); } });
-    settings.appendChild(h('div',{}, 'Liczba dodatkowych użytkowników: ', extraInp));
+    const extraRow = h('div',{class:'form-row'}, h('label',{},'Liczba dodatkowych użytkowników'), extraInp);
+    settings.appendChild(extraRow);
 
     wrap.appendChild(settings);
 
@@ -267,8 +285,9 @@
     (state.catalog?.mainProducts||[]).forEach(mp=>{
       const isOwned = state.ownedMain.has(mp.key);
       const isSelected = state.selection.main.has(mp.key);
+      const label = MAIN_LABELS_BY_KEY[mp.key] || mp.label || mp.key;
       const tile = tileBtn({
-        label: LABELS[mp.key] || mp.key,
+        label,
         selected: isOwned || isSelected,
         owned: isOwned,
         onclick: () => {
@@ -286,8 +305,9 @@
     const svcBar = h('div',{class:'tiles'});
     (state.catalog?.services||[]).forEach(svc=>{
       const selected = state.selection.services.has(svc.key);
+      const label = SERVICE_LABELS_BY_KEY[svc.key] || svc.label || svc.key; // przyjazna nazwa
       const tile = tileBtn({
-        label: svc.label,
+        label,
         selected,
         owned: false,
         onclick: () => {
@@ -301,32 +321,25 @@
     wrap.append(h('h3',{},'Usługi'), svcBar);
 
     // Podsumowanie (estymacja)
-    const summaryBox = h('div',{class:'summary'});
+    const summaryBox = h('div',{class:'card summary'});
     wrap.append(h('h3',{},'Podsumowanie (estymacja)'), summaryBox);
 
     // CTA: przejście dalej
-    wrap.appendChild(h('button',{class:'btn', type:'button', onclick:()=>go('summary')},'Przejdź do podsumowania'));
+    wrap.appendChild(h('button',{class:'btn btn-primary', type:'button', onclick:()=>go('summary')},'Przejdź do podsumowania'));
 
     $app.innerHTML='';
     $app.appendChild(wrap);
     renderSummaryBox();
 
     // helpers for this view
-    function tileBtn({label, selected, owned, onclick}){
-      const b = h('button',{class:`tile ${selected?'tile--selected':''} ${owned?'tile--owned':''}`, type:'button', onclick}, label);
-      if (owned) b.appendChild(h('span',{class:'pill pill--owned'},'Posiadany'));
-      else if (selected) b.appendChild(h('span',{class:'pill pill--selected'},'Wybrany'));
-      return b;
-    }
-
     function renderTilesAndSummary(){
-      // przerysuj kafelki i podsumowanie
       mainBar.innerHTML = '';
       (state.catalog?.mainProducts||[]).forEach(mp=>{
         const isOwned = state.ownedMain.has(mp.key);
         const isSelected = state.selection.main.has(mp.key);
+        const label = MAIN_LABELS_BY_KEY[mp.key] || mp.label || mp.key;
         const tile = tileBtn({
-          label: LABELS[mp.key] || mp.key,
+          label,
           selected: isOwned || isSelected,
           owned: isOwned,
           onclick: () => {
@@ -342,8 +355,9 @@
       svcBar.innerHTML = '';
       (state.catalog?.services||[]).forEach(svc=>{
         const selected = state.selection.services.has(svc.key);
+        const label = SERVICE_LABELS_BY_KEY[svc.key] || svc.label || svc.key;
         const tile = tileBtn({
-          label: svc.label,
+          label,
           selected,
           owned: false,
           onclick: () => {
@@ -362,74 +376,74 @@
       summaryBox.innerHTML = '';
       const tier = state.global.tier;
 
-      const selectedMainLabels = [...state.selection.main.values()].map(k => LABELS[k] || k);
-      const selectedMainTotal = selectedMainLabels.reduce((s,lab)=> s + getPrice(lab, tier), 0);
+      // Produkty główne – etykiety po kluczach
+      const selectedMainLabels = [...state.selection.main.values()].map(k => MAIN_LABELS_BY_KEY[k] || k);
+      const selectedMainTotal = selectedMainLabels.reduce((s,lab)=> s + getPriceByLabel(lab, tier), 0);
 
-      const selectedServicesLabels = [...state.selection.services.values()];
-      const selectedServicesTotal = selectedServicesLabels.reduce((s,lab)=> s + getPrice(lab, tier), 0);
+      // Usługi – etykiety po kluczach
+      const selectedServiceLabels = [...state.selection.services.values()].map(k => SERVICE_LABELS_BY_KEY[k] || k);
+      const selectedServicesTotal = selectedServiceLabels.reduce((s,lab)=> s + getPriceByLabel(lab, tier), 0);
 
+      // Dodatkowi użytkownicy
       const extraQty  = Number(state.global.extraUsers||0);
       const extraUnit = Number(EXTRA_USER_PRICES[tier] || 0);
       const extraTotal= extraQty * extraUnit;
 
+      // Rabat pakietowy – TYLKO jeżeli Pakiet = ON
+      let discount = 0;
       if (state.global.packageMode) {
-        const unionCount = new Set([...state.ownedMain, ...state.selection.main]).size;
-        const discount = bundleDiscount(unionCount);
-        const compensation = computeCompensation(); // liczy wg dat z getOwnedEndDate / getPackEndDate
-        const payable = Math.max(0, selectedMainTotal + selectedServicesTotal + extraTotal - discount + compensation);
-
-        summaryBox.append(
-          h('div',{class:'totals'},
-            h('div',{}, `Nowe moduły (łącznie): ${money(selectedMainTotal)}`),
-            h('div',{}, `Usługi (łącznie): ${money(selectedServicesTotal)}`),
-            h('div',{}, `Dodatkowi użytkownicy: ${extraQty} × ${money(extraUnit)} = ${money(extraTotal)}`),
-            h('div',{}, `Rabat pakietowy: -${money(discount)}`),
-            h('div',{}, `Rekompensata: +${money(compensation)}`),
-            h('div',{class:'totals-grand'}, `Razem (est.): ${money(payable)}`)
-          )
-        );
-        return;
+        const unionCount = new Set([...state.ownedMain, ...state.selection.main]).size; // posiadane + nowe
+        discount = bundleDiscount(unionCount);
       }
 
-      // Pakiet OFF → rozbicie linii (bez kompensaty)
+      // Rekompsensata – tylko przy pakiecie
+      const compensation = state.global.packageMode ? computeCompensation() : 0;
+
+      // SUMA
+      const payable = Math.max(0, selectedMainTotal + selectedServicesTotal + extraTotal - discount + compensation);
+
+      // Tabela pozycji (bez kompensaty/discount na liniach – one na dole)
       const list = h('div',{class:'li-table'});
-      list.append(rowLi('Pozycja','Qty','Cena jedn.','Rabat','Suma', true));
+      list.append(rowLi('Pozycja','Qty','Cena jedn.','Suma', true));
+
       selectedMainLabels.forEach(lab=>{
-        const price = getPrice(lab, tier);
-        list.append(rowLi(lab,'1',money(price),'—',money(price)));
+        const price = getPriceByLabel(lab, tier);
+        list.append(rowLi(lab,'1',money(price),money(price)));
       });
-      selectedServicesLabels.forEach(lab=>{
-        const price = getPrice(lab, tier);
-        list.append(rowLi(lab,'1',money(price),'—',money(price)));
+      selectedServiceLabels.forEach(lab=>{
+        const price = getPriceByLabel(lab, tier);
+        list.append(rowLi(lab,'1',money(price),money(price)));
       });
       if (extraQty>0){
-        list.append(rowLi('Dodatkowi użytkownicy', String(extraQty), money(extraUnit), '—', money(extraTotal)));
+        list.append(rowLi('Dodatkowi użytkownicy', String(extraQty), money(extraUnit), money(extraTotal)));
       }
       summaryBox.append(list);
 
-      const discount = bundleDiscount(state.selection.main.size);
-      const payable = Math.max(0, selectedMainTotal + selectedServicesTotal + extraTotal - discount);
-      summaryBox.append(
-        h('div',{class:'totals'},
-          h('div',{}, `Rabat pakietowy (tylko nowe): -${money(discount)}`),
-          h('div',{class:'totals-grand'}, `Razem (est.): ${money(payable)}`)
-        )
-      );
+      // Podsumowania
+      const sums = h('div',{class:'totals'});
+      if (state.global.packageMode) {
+        sums.append(
+          h('div',{}, `Rabat pakietowy: -${money(discount)}`),
+          h('div',{}, `Rekompensata: +${money(compensation)}`)
+        );
+      }
+      sums.append(h('div',{class:'totals-grand'}, `Razem (est.): ${money(payable)}`));
+      summaryBox.append(sums);
 
-      function rowLi(a,b,c,d,e,head=false){
+      function rowLi(a,b,c,d,head=false){
         const r = h('div',{class:'li-row'+(head?' li-head':'')});
-        r.append(h('div',{},a),h('div',{},b),h('div',{},c),h('div',{},d),h('div',{},e));
+        r.append(h('div',{},a),h('div',{},b),h('div',{},c),h('div',{},d));
         return r;
       }
     }
   }
 
-  // ====== View: Summary (placeholder do czasu podpięcia deal/quotes) ======
+  // ====== Widok 3: summary (placeholder) ======
   function viewSummary(){
     const w = h('div',{class:'view'});
     w.appendChild(h('h2',{},'Podsumowanie'));
-    w.appendChild(h('div',{class:'muted'}, 'Widok deal/quotes dołączymy po potwierdzeniu, że CRM zwraca daty i kalkulacje są ok.'));
-    w.appendChild(h('button',{class:'btn', type:'button', onclick:()=>go('products')},'← Wróć do kreatora'));
+    w.appendChild(h('div',{class:'muted'}, 'Widok deal/quotes dołączymy po akceptacji UI kalkulatora.'));
+    w.appendChild(h('button',{class:'btn btn-secondary', type:'button', onclick:()=>go('products')},'← Wróć do kreatora'));
     $app.innerHTML='';
     $app.appendChild(w);
   }
@@ -449,7 +463,7 @@
       search: base ? `${base}/companies-search` : '',
       overview: base ? `${base}/company-overview` : '',
       catalog: base ? `${base}/catalog` : '',
-      companyBilling: base ? `${base}/company-billing` : '' // opcjonalny; jeśli brak, kompensata wyjdzie 0
+      companyBilling: base ? `${base}/company-billing` : '' // opcjonalny
     };
 
     go('builder');
