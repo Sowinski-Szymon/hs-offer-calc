@@ -1,18 +1,26 @@
-<!doctype html>
-<html>
+<!DOCTYPE html>
+<html lang="pl">
 <head>
-  {{ standard_header_includes }}
-  <link rel="stylesheet" href="https://f.hubspotusercontentXX.net/hubfs/XXXXXXX/styles.css">
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Kalkulator i generator ofert – Publink</title>
+
+  <!-- STYLE: podmień URL na publiczny z File Managera HS -->
+  <link rel="stylesheet" href="https://YOUR-HS-DOMAIN/hs-fs/hubfs/path/to/styles.css" />
 </head>
 <body>
-  {{ standard_body_includes }}
-
   <div class="calc-wrap">
-    <h1>Kalkulator i generator ofert</h1>
-    <div id="app" data-endpoints='{"base":"https://TWÓJ-PROJEKT.vercel.app/api"}'></div>
+    <div class="calc-header">
+      <!-- LOGO: wklej publiczny URL z File Managera lub użyj obecnego logo Publink -->
+      <img src="https://YOUR-HS-DOMAIN/hs-fs/hubfs/path/to/logo.svg" alt="Publink logo" />
+      <h1>Kalkulator i generator ofert</h1>
+    </div>
+
+    <!-- Główny kontener aplikacji -->
+    <div id="app" data-endpoints='{"base":"https://hs-offer-calc.vercel.app/api"}'></div>
   </div>
 
-  {{ standard_footer_includes }}
-  <script src="https://f.hubspotusercontentXX.net/hubfs/XXXXXXX/app.js"></script>
+  <!-- SCRIPT: podmień URL na publiczny z File Managera HS -->
+  <script src="https://YOUR-HS-DOMAIN/hs-fs/hubfs/path/to/app.js"></script>
 </body>
 </html>
