@@ -2,134 +2,112 @@
 const { withCORS } = require('./_lib/cors');
 const { hsFetch } = require('./_lib/hs');
 
-// Pipeline, z którego bierzemy (najnowszy) deal skojarzony z firmą
-const PIPELINE_ID = '1978057944';
-
-// mapowanie: właściwości z datą nast. rozliczenia per produkt główny
-const NEXT_BILLING_PROPS = {
-  WPF: 'wpf_next_billing_date',
+// Twarde mapowanie właściwości dat
+const DATE_PROPS = {
+  WPF:    'wpf_next_billing_date',
   BUDZET: 'best_next_billing_date',
-  UMOWY: 'umowy_next_billing_date',
-  SWB: 'swb_next_billing_date'
+  UMOWY:  'umowy_next_billing_date',
+  SWB:    'swb_next_billing_date',
+  PACK:   'pack_next_billing_date',
 };
+
+// Normalizacja nazw produktów z CRM -> klucze WPF/BUDZET/UMOWY/SWB
+function normalizeProductName(input) {
+  if (!input) return null;
+  // zdejmij diakrytyki
+  let s = String(input).normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+  s = s.toUpperCase().trim();
+
+  // usuń prefixy/śmieci typu "EPUBLINK", kropki, podwójne spacje
+  s = s.replace(/^EPUBLINK\s+/g, '').replace(/\s+/g, ' ');
+
+  // mądre dopasowanie po słowach-kluczach
+  if (/\bWPF\b/.test(s)) return 'WPF';
+  if (/\bUMOWY?\b/.test(s)) return 'UMOWY';
+  if (/\bSWB\b/.test(s)) return 'SWB';
+  if (/\bBUDZET\b/.test(s) || /\bBUDZET\b/.test(s)) return 'BUDZET'; // po diakrytykach i tak mamy BUDZET
+
+  // czasami ktoś wpisze "EPUBLINK SWB" – powyższe to już pokrywa;
+  // jeśli jednak wpadnie coś egzotycznego, zwróć surowe (dla debug)
+  return s;
+}
+
+// pomocnik: wyciągnij pierwszą niepustą wartość z listy property
+function pick(obj, prop) {
+  const v = obj?.[prop];
+  return (v !== undefined && v !== null && v !== '') ? v : null;
+}
 
 module.exports = withCORS(async (req, res) => {
   try {
     if (req.method === 'OPTIONS') return res.status(204).end();
     if (req.method !== 'GET') return res.status(405).json({ error: 'Method not allowed' });
 
-    const companyId = req.query.companyId;
+    const { companyId } = req.query;
     if (!companyId) return res.status(400).json({ error: 'companyId required' });
 
-    // Właściwości Company, których potrzebujemy
-    const properties = [
+    // Pobierz wszystkie potrzebne właściwości za 1 razem
+    const props = [
       'name',
+      'subscription_tier',
       'aktywne_produkty_glowne',
       'aktywne_uslugi_dodatkowe',
-      'wpf_next_billing_date',
-      'swb_next_billing_date',
-      'best_next_billing_date',
-      'umowy_next_billing_date',
-      'pakiet',                 // checkbox: czy firma ma pakiet
-      'pack_next_billing_date', // zbiorcza data końca pakietu
-      'subscription_tier'       // (opcjonalnie, jeśli przechowujecie ładne nazwy typu Solo/Plus/Pro/Max)
+      DATE_PROPS.WPF,
+      DATE_PROPS.BUDZET,
+      DATE_PROPS.UMOWY,
+      DATE_PROPS.SWB,
+      DATE_PROPS.PACK
     ];
 
-    // 1) Firma
-    const c = await hsFetch(
-      `/crm/v3/objects/companies/${companyId}?properties=${encodeURIComponent(properties.join(','))}`
-    );
-    const p = c?.properties || {};
+    const comp = await hsFetch(`/crm/v3/objects/companies/${companyId}?properties=${encodeURIComponent(props.join(','))}`);
+    const p = comp?.properties || {};
 
-    // helpery
-    const parseCsv = (val) =>
-      String(val || '')
-        .split(',')
-        .map((s) => s.trim())
-        .filter(Boolean);
+    // rozbij CSV
+    const splitCsv = (val) => String(val || '')
+      .split(',')
+      .map(s => s.trim())
+      .filter(Boolean);
 
-    const norm = (s) =>
-      s
-        .toUpperCase()
-        .replace('BUDŻET', 'BUDZET')
-        .replace('Ł', 'L')
-        .replace('Ś', 'S')
-        .replace('Ó', 'O')
-        .replace('Ż', 'Z')
-        .replace('Ź', 'Z')
-        .replace('Ć', 'C')
-        .replace('Ę', 'E')
-        .replace('Ą', 'A')
-        .replace('Ń', 'N');
+    // Znormalizuj posiadane produkty główne
+    const ownedMainKeys = [
+      ...new Set(
+        splitCsv(p.aktywne_produkty_glowne)
+          .map(normalizeProductName)
+          .filter(Boolean)
+      )
+    ];
 
-    const ownedMain = [...new Set(parseCsv(p.aktywne_produkty_glowne).map(norm))];
-    const ownedServices = [...new Set(parseCsv(p.aktywne_uslugi_dodatkowe).map(norm))];
+    // Znormalizuj usługi (zostawiam surowe, ale równie dobrze możesz tu też normalizować pod własny klucz)
+    const ownedServices = [
+      ...new Set(splitCsv(p.aktywne_uslugi_dodatkowe))
+    ];
 
-    const mainWithBilling = ownedMain.map((key) => {
-      const prop = NEXT_BILLING_PROPS[key];
-      return { key, nextBillingDate: prop ? p[prop] || null : null };
+    // Zbuduj listę "owned.main" z datami z właściwości firmy
+    const mainWithBilling = ownedMainKeys.map(key => {
+      let nextBillingDate = null;
+      if (key === 'WPF')    nextBillingDate = pick(p, DATE_PROPS.WPF);
+      if (key === 'BUDZET') nextBillingDate = pick(p, DATE_PROPS.BUDZET);
+      if (key === 'UMOWY')  nextBillingDate = pick(p, DATE_PROPS.UMOWY);
+      if (key === 'SWB')    nextBillingDate = pick(p, DATE_PROPS.SWB);
+      return { key, nextBillingDate };
     });
 
-    // 2) (Dodatkowo) Najnowszy deal z tego pipeline'u, skojarzony z firmą
-    //    Używamy search po dealach z filtrem assoc. company i pipeline = PIPELINE_ID
-    let dealSummary = null;
-    try {
-      const searchBody = {
-        filterGroups: [
-          {
-            filters: [
-              {
-                propertyName: 'associations.company',
-                operator: 'EQ',
-                value: String(companyId)
-              },
-              {
-                propertyName: 'pipeline',
-                operator: 'EQ',
-                value: PIPELINE_ID
-              }
-            ]
-          }
-        ],
-        sorts: [{ propertyName: 'createdate', direction: 'DESCENDING' }],
-        limit: 1,
-        properties: ['dealname', 'pipeline', 'dealstage', 'hubspot_owner_id']
-      };
+    // Company-level: tier i data pakietu
+    const packNext = pick(p, DATE_PROPS.PACK);
 
-      const sr = await hsFetch(`/crm/v3/objects/deals/search`, {
-        method: 'POST',
-        body: JSON.stringify(searchBody)
-      });
-
-      const d = Array.isArray(sr?.results) && sr.results.length ? sr.results[0] : null;
-      if (d) {
-        dealSummary = {
-          id: d.id,
-          name: d.properties?.dealname || '',
-          pipeline: d.properties?.pipeline || '',
-          stage: d.properties?.dealstage || '',
-          ownerId: d.properties?.hubspot_owner_id || null
-        };
-      }
-    } catch (e) {
-      // Nie blokujemy całej odpowiedzi, jeśli wyszukiwanie deala się nie powiedzie
-      // dealSummary pozostanie null
-    }
-
-    // 3) Odpowiedź
     return res.status(200).json({
       company: {
-        id: c.id,
+        id: comp.id,
         name: p.name || '',
         tier: p.subscription_tier || null,
-        isPackageOnCompany: String(p.pakiet || '').toLowerCase() === 'true',
-        packNextBillingDate: p.pack_next_billing_date || null
+        isPackageOnCompany: false, // jeżeli masz checkbox "pakiet" na company i chcesz go tu zwracać – dodaj go tu
+        packNextBillingDate: packNext
       },
       owned: {
-        main: mainWithBilling,
+        main: mainWithBilling,   // <- KLUCZE JUŻ SĄ WPF/BUDZET/UMOWY/SWB, daty podbite z właściwości
         services: ownedServices
       },
-      deal: dealSummary // może być null, jeśli brak deal'a w pipeline 1978057944
+      deal: null // (jeśli miałeś, usuń – deal robisz osobnym endpointem)
     });
   } catch (e) {
     return res.status(500).json({ error: 'company-overview failed', detail: String(e && e.message || e) });
