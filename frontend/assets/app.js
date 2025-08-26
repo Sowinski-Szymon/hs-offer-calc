@@ -1,7 +1,9 @@
 (() => {
   let $app = null;
   let ep = {};
+  let lastError = '';
 
+  // ===== Konfiguracja cen =====
   const PRICING_MATRIX = {
     "ePublink Budżet": { "Tier1": 6990, "Tier2": 9590, "Tier3": 11390, "Tier4": 33790 },
     "ePublink SWB":    { "Tier1": 2590, "Tier2": 2790, "Tier3": 3290, "Tier4": 3290 },
@@ -14,6 +16,7 @@
   const EXTRA_USER_PRODUCT_ID = '163198115623';
   const EXTRA_USER_PRICES = { Tier1: 590, Tier2: 690, Tier3: 890, Tier4: 990 };
 
+  // ===== Etykiety =====
   const LABELS = {
     WPF: 'ePublink WPF',
     BUDZET: 'ePublink Budżet',
@@ -23,16 +26,19 @@
   const TIER_LABEL = { Tier1: 'Solo', Tier2: 'Plus', Tier3: 'Pro', Tier4: 'Max' };
   const TIER_CODE = { Solo: 'Tier1', Plus: 'Tier2', Pro: 'Tier3', Max: 'Tier4' };
 
+  // ===== Stan =====
   const state = {
     company: null,
-    catalog: null,
-    overview: null,
-    ownedMain: new Set(),
+    catalog: { mainProducts: [], services: [] },
+    overview: null,               // { company, owned:{main,services} }
+    billing: { isPackageOnCompany:false, lastNet:{} }, // z /company-billing (opcjonalny)
+    ownedMain: new Set(),         // klucze: WPF/BUDZET/UMOWY/SWB
     selection: { main: new Set(), services: new Set() },
     global: { packageMode: false, tier: 'Tier1', extraUsers: 0, startDate: null },
     router: { page: 'builder' }
   };
 
+  // ===== Utils =====
   function h(tag, attrs = {}, ...children) {
     const el = document.createElement(tag);
     for (const [k,v] of Object.entries(attrs)) {
@@ -43,24 +49,30 @@
     children.flat().forEach(c => el.appendChild(typeof c === 'string' ? document.createTextNode(c) : c));
     return el;
   }
-
   async function api(url, opts) {
-    const r = await fetch(url, opts);
-    if (!r.ok) throw new Error(await r.text().catch(()=>String(r.status)));
-    return r.json();
+    try{
+      const r = await fetch(url, opts);
+      if (!r.ok) {
+        const t = await r.text().catch(()=>String(r.status));
+        throw new Error(`${r.status} ${t}`);
+      }
+      return await r.json();
+    }catch(e){
+      lastError = String(e && e.message || e);
+      renderDiagnostics(); // pokaż błąd
+      throw e;
+    }
   }
-
   function fmtDate(val) {
-    if (!val) return '—';
+    if (val === null || val === undefined || val === '') return '—';
     const n = Number(val);
     const d = isNaN(n) ? new Date(String(val)) : new Date(n);
     return isNaN(d.getTime()) ? '—' : d.toLocaleDateString('pl-PL');
   }
-
   function money(v){ return `${Number(v||0).toFixed(2)} PLN`; }
   function bundleDiscount(c){ if(c>=4) return 900; if(c===3) return 600; if(c===2) return 300; return 0; }
   function tierNice(code){ return TIER_LABEL[code] || code; }
-  function getPrice(label, tierCodeStr){ const m=PRICING_MATRIX[label]; return m ? Number(m[tierCodeStr]||0) : 0; }
+  function getPrice(label, tier){ const m=PRICING_MATRIX[label]; return m ? Number(m[tier]||0) : 0; }
 
   function go(page){
     state.router.page = page;
@@ -69,7 +81,35 @@
     if (page === 'summary') viewSummary();
   }
 
-  // Widok 1: wybór firmy
+  // ===== Diagnostics bar =====
+  function renderDiagnostics(okHealth=false){
+    let bar = document.getElementById('calc-diagnostics');
+    if (!bar) {
+      bar = document.createElement('div');
+      bar.id = 'calc-diagnostics';
+      bar.style.cssText = 'font:12px/1.4 system-ui,Segoe UI,Arial; background:#f8fafc; border:1px solid #e2e8f0; padding:8px 10px; margin:8px 0; border-radius:8px; color:#0f172a;';
+      $app.parentNode.insertBefore(bar, $app);
+    }
+    const base = ep?.base || '(brak)';
+    bar.innerHTML = `
+      <div><strong>Diagnostics</strong></div>
+      <div>API base: <code>${base}</code> · Health: <b style="color:${okHealth?'#16a34a':'#ef4444'}">${okHealth?'OK':'N/A'}</b></div>
+      ${lastError ? `<div>Last error: <span style="color:#b91c1c">${escapeHtml(lastError)}</span></div>` : ''}
+    `;
+  }
+  function escapeHtml(s){ return String(s).replace(/[&<>"']/g,m=>({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' }[m])); }
+
+  async function pingHealth(){
+    if (!ep.health) { renderDiagnostics(false); return; }
+    try{
+      await api(ep.health);
+      renderDiagnostics(true);
+    }catch(e){
+      renderDiagnostics(false);
+    }
+  }
+
+  // ===== Widok 1: wybór firmy =====
   function viewCompanyPicker(){
     const input = h('input',{
       class:'inp',
@@ -77,23 +117,29 @@
       style:'display:block;width:100%;max-width:640px;padding:12px;border:2px solid #2b6cb0;border-radius:8px;margin:12px 0;'
     });
     const list = h('div',{class:'list', style:'margin-top:8px;'});
+    const info = h('div',{class:'muted', style:'color:#475569;'}, 'Zacznij pisać – minimum 2 znaki.');
 
     let t;
     input.oninput = ()=> {
       const q = input.value.trim();
       clearTimeout(t);
       t = setTimeout(async () => {
-        if (q.length<2){ list.innerHTML=''; return; }
+        if (q.length<2){ list.innerHTML=''; info.textContent='Wpisz minimum 2 znaki.'; return; }
         try{
+          info.textContent = 'Szukam...';
           const results = await api(`${ep.search}?query=${encodeURIComponent(q)}`);
           list.innerHTML = '';
+          info.textContent = results.length ? '' : 'Brak wyników.';
           results.forEach(r=>{
-            const row = h('div',{class:'row', style:'padding:10px;border:1px solid #e2e8f0;border-radius:8px;margin-bottom:8px;cursor:pointer;'}, r.properties.name||'Bez nazwy');
+            const row = h('div',{class:'row', style:'padding:10px;border:1px solid #e2e8f0;border-radius:8px;margin-bottom:8px;cursor:pointer;display:flex;justify-content:space-between;'},
+              h('span',{}, r.properties.name||'Bez nazwy'),
+              h('span',{style:'color:#64748b;'}, r.properties.domain||'')
+            );
             row.onclick = ()=>pickCompany(r);
             list.appendChild(row);
           });
         }catch(e){
-          list.innerHTML = '<div class="muted">Błąd wyszukiwania firm.</div>';
+          info.textContent = 'Błąd wyszukiwania firm (patrz Diagnostics).';
         }
       },300);
     };
@@ -103,102 +149,331 @@
       h('div',{class:'view'},
         h('h2',{},'Wybierz firmę'),
         input,
+        info,
         list
       )
     );
   }
 
+  // ===== Po wyborze firmy =====
   async function pickCompany(c){
     state.company = c;
+    lastError = '';
     try{
-      const [catalog, overview] = await Promise.all([
-        api(ep.catalog),
-        api(`${ep.overview}?companyId=${encodeURIComponent(c.id)}`)
-      ]);
-      state.catalog = catalog;
-      state.overview = overview;
-      state.ownedMain = new Set((overview?.owned?.main||[]).map(x=>x.key));
+      // Każdy call łapiemy osobno, żeby UI poszło dalej nawet jak 1 padnie
+      const promises = [];
+      promises.push(api(`${ep.overview}?companyId=${encodeURIComponent(c.id)}`).then(r=>state.overview=r));
+      promises.push(api(ep.catalog).then(r=>state.catalog=r).catch(e=>{ state.catalog={mainProducts:[],services:[]}; throw e; }));
+      if (ep.companyBilling) {
+        promises.push(api(`${ep.companyBilling}?companyId=${encodeURIComponent(c.id)}`).then(r=>state.billing=r).catch(()=>{ state.billing={isPackageOnCompany:false,lastNet:{}}; }));
+      }
+      await Promise.all(promises);
 
+      state.ownedMain = new Set((state.overview?.owned?.main||[]).map(x=>x.key));
       state.global.packageMode = state.ownedMain.size > 0;
       state.global.startDate = new Date().toISOString().slice(0,10);
 
       go('products');
     }catch(e){
-      alert('Nie udało się pobrać danych firmy.');
+      alert('Nie udało się pobrać danych z API. Sprawdź Diagnostics powyżej.');
       go('builder');
     }
   }
 
-  // Widok 2: kreator produktów
-  function viewProductPicker(){
-    const wrap = h('div',{class:'view'});
-    wrap.appendChild(h('h2',{}, `Firma: ${state.company.properties.name}`));
+  // ===== Kompensata (liczona tylko gdy Pakiet=ON) =====
+  function daysBetweenISO(startISO, endVal){
+    if(!startISO || !endVal) return 0;
+    const s = new Date(startISO+'T00:00:00');
+    const n = Number(endVal);
+    const e = isNaN(n) ? new Date(String(endVal)) : new Date(n);
+    const diff = Math.ceil((e - s) / (1000*60*60*24));
+    return Math.max(0, diff);
+  }
+  function computeCompensation(){
+    if (!state.global.packageMode) return 0;
+    const startISO = state.global.startDate;
+    if (!startISO) return 0;
 
-    // Obecnie posiadane
-    if (state.overview) {
-      const sec = h('div',{class:'owned'});
-      sec.appendChild(h('h3',{},'Obecnie posiadane'));
-      const list = h('div',{class:'owned-list'});
-      (state.overview.owned?.main||[]).forEach(item=>{
-        const label = LABELS[item.key] || item.key;
-        const dateTxt = fmtDate(item.nextBillingDate);
-        list.appendChild(h('div',{class:'owned-row'}, `${label} – ${dateTxt}`));
-      });
-      wrap.appendChild(sec);
+    const ov = state.overview || {};
+    const lastNet = state.billing?.lastNet || {};
+    const isPkgOnCompany = !!state.billing?.isPackageOnCompany;
+
+    // daty końca z overview.owned.main (API musi je zwrócić)
+    const nextDatesByKey = {};
+    (ov?.owned?.main||[]).forEach(x => { nextDatesByKey[x.key] = x.nextBillingDate || null; });
+
+    const D = 364;
+
+    if (isPkgOnCompany && ov?.company?.packNextBillingDate) {
+      const net = Number(lastNet.package || 0);
+      if (!net) return 0;
+      const days = daysBetweenISO(startISO, ov.company.packNextBillingDate);
+      return (net / D) * days;
     }
 
+    // firma nie jest w pakiecie -> sumuj za posiadane moduły
+    let sum = 0;
+    for (const key of state.ownedMain) {
+      const net = Number(lastNet[key] || 0);
+      const end = nextDatesByKey[key];
+      if (!net || !end) continue;
+      const days = daysBetweenISO(startISO, end);
+      sum += (net / D) * days;
+    }
+    return sum;
+  }
+
+  // ===== Widok 2: kreator produktów =====
+  function viewProductPicker(){
+    const wrap = h('div',{class:'view'});
+
+    // Tytuł
+    wrap.appendChild(h('h2',{}, `Firma: ${state.company.properties.name}`));
+
+    // Posiadane (ładne etykiety + daty)
+    const sec = h('div',{class:'owned'});
+    sec.appendChild(h('h3',{},'Obecnie posiadane'));
+    const list = h('div',{class:'owned-list'});
+    (state.overview?.owned?.main||[]).forEach(item=>{
+      const label = LABELS[item.key] || item.key;
+      list.appendChild(h('div',{class:'owned-row'},
+        h('span',{}, label),
+        h('span',{style:'color:#64748b;'}, fmtDate(item.nextBillingDate))
+      ));
+    });
+    if (!list.children.length) list.appendChild(h('div',{class:'muted'},'Brak posiadanych produktów w CRM.'));
+    sec.appendChild(list);
+    wrap.appendChild(sec);
+
+    // Ustawienia globalne
+    const settings = h('div',{class:'settings'});
+    settings.appendChild(h('h3',{},'Ustawienia globalne'));
+
     // Pakiet
-    const pkg = h('label',{}, 
-      h('input',{type:'checkbox', onchange:(e)=>{ state.global.packageMode = e.target.checked; }}),
-      ' Pakiet'
+    const pkgLbl = h('label',{style:'display:flex;gap:8px;align-items:center;'},
+      h('input',{type:'checkbox', onchange:(e)=>{ state.global.packageMode = e.target.checked; renderSummaryBox(); }}),
+      ' Pakiet (rabat liczony od posiadanych + nowych)'
     );
-    pkg.querySelector('input').checked = state.global.packageMode;
-    wrap.appendChild(pkg);
+    pkgLbl.querySelector('input').checked = state.global.packageMode;
+    settings.appendChild(pkgLbl);
 
     // Data startu
-    const dateInp = h('input',{type:'date', value: state.global.startDate});
-    dateInp.onchange = ()=>{ state.global.startDate = dateInp.value; };
-    wrap.appendChild(h('div',{}, 'Data startu: ', dateInp));
+    const dateRow = h('div',{style:'margin:6px 0;display:flex;gap:8px;align-items:center;'},
+      h('span',{},'Data startu:'),
+      h('input',{type:'date', value: state.global.startDate, onchange:(e)=>{ state.global.startDate = e.target.value; renderSummaryBox(); }})
+    );
+    settings.appendChild(dateRow);
 
     // Tier
-    const tierSel = h('select',{onchange:()=>{ state.global.tier = tierSel.value; }});
+    const tierSel = h('select',{onchange:(e)=>{ state.global.tier = e.target.value; renderSummaryBox(); }});
     ['Tier1','Tier2','Tier3','Tier4'].forEach(code=>{
-      const opt=h('option',{value:code},tierNice(code));
-      if(code===state.global.tier) opt.selected=true;
+      const opt=h('option',{value:code}, TIER_LABEL[code]);
+      if (code===state.global.tier) opt.selected=true;
       tierSel.appendChild(opt);
     });
-    wrap.appendChild(h('div',{}, 'Tier: ', tierSel));
+    settings.appendChild(h('div',{}, 'Tier: ', tierSel));
 
-    // Extra users
-    const extraInp = h('input',{type:'number',min:'0',value:String(state.global.extraUsers||0),oninput:()=>{state.global.extraUsers=Number(extraInp.value||0);} });
-    wrap.appendChild(h('div',{}, 'Liczba dodatkowych użytkowników: ', extraInp));
+    // Dodatkowi użytkownicy
+    const extraInp = h('input',{type:'number',min:'0',value:String(state.global.extraUsers||0),oninput:(e)=>{ state.global.extraUsers=Number(e.target.value||0); renderSummaryBox(); } });
+    settings.appendChild(h('div',{}, 'Liczba dodatkowych użytkowników: ', extraInp));
 
-    // CTA
+    wrap.appendChild(settings);
+
+    // Produkty główne — kafelki
+    const mainBar = h('div',{class:'tiles'});
+    (state.catalog?.mainProducts||[]).forEach(mp=>{
+      const isOwned = state.ownedMain.has(mp.key);
+      const isSelected = state.selection.main.has(mp.key);
+      const tile = tileBtn({
+        label: LABELS[mp.key] || mp.key,
+        selected: isOwned || isSelected,
+        owned: isOwned,
+        onclick: () => {
+          if (isOwned) return;
+          if (state.selection.main.has(mp.key)) state.selection.main.delete(mp.key);
+          else state.selection.main.add(mp.key);
+          renderTilesAndSummary(mainBar, svcBar, summaryBox); // odśwież
+        }
+      });
+      mainBar.appendChild(tile);
+    });
+    wrap.append(h('h3',{},'Produkty główne'), mainBar);
+
+    // Usługi — kafelki
+    const svcBar = h('div',{class:'tiles'});
+    (state.catalog?.services||[]).forEach(svc=>{
+      const selected = state.selection.services.has(svc.key);
+      const tile = tileBtn({
+        label: svc.label,
+        selected,
+        owned: false,
+        onclick: () => {
+          if (selected) state.selection.services.delete(svc.key);
+          else state.selection.services.add(svc.key);
+          renderTilesAndSummary(mainBar, svcBar, summaryBox);
+        }
+      });
+      svcBar.appendChild(tile);
+    });
+    wrap.append(h('h3',{},'Usługi'), svcBar);
+
+    // Podsumowanie (estymacja)
+    const summaryBox = h('div',{class:'summary'});
+    wrap.append(h('h3',{},'Podsumowanie (estymacja)'), summaryBox);
+
+    // CTA: przejście dalej
     wrap.appendChild(h('button',{class:'btn', type:'button', onclick:()=>go('summary')},'Przejdź do podsumowania'));
 
     $app.innerHTML='';
     $app.appendChild(wrap);
+    renderSummaryBox();
+
+    function renderTilesAndSummary(mb, sb, sum){
+      // przerysuj kafelki (dodaj „Wybrany”)
+      mb.querySelectorAll('.tile').forEach(el=>el.remove());
+      (state.catalog?.mainProducts||[]).forEach(mp=>{
+        const isOwned = state.ownedMain.has(mp.key);
+        const isSelected = state.selection.main.has(mp.key);
+        const tile = tileBtn({
+          label: LABELS[mp.key] || mp.key,
+          selected: isOwned || isSelected,
+          owned: isOwned,
+          onclick: () => {
+            if (isOwned) return;
+            if (state.selection.main.has(mp.key)) state.selection.main.delete(mp.key);
+            else state.selection.main.add(mp.key);
+            renderTilesAndSummary(mb, sb, sum);
+          }
+        });
+        mb.appendChild(tile);
+      });
+
+      sb.querySelectorAll('.tile').forEach(el=>el.remove());
+      (state.catalog?.services||[]).forEach(svc=>{
+        const selected = state.selection.services.has(svc.key);
+        const tile = tileBtn({
+          label: svc.label,
+          selected,
+          owned: false,
+          onclick: () => {
+            if (selected) state.selection.services.delete(svc.key);
+            else state.selection.services.add(svc.key);
+            renderTilesAndSummary(mb, sb, sum);
+          }
+        });
+        sb.appendChild(tile);
+      });
+
+      renderSummaryBox();
+    }
+
+    function tileBtn({label, selected, owned, onclick}){
+      const b = h('button',{class:`tile ${selected?'tile--selected':''} ${owned?'tile--owned':''}`, type:'button', onclick}, label);
+      if (owned) b.appendChild(h('span',{class:'pill pill--owned'},'Posiadany'));
+      else if (selected) b.appendChild(h('span',{class:'pill pill--selected'},'Wybrany'));
+      return b;
+    }
+
+    function renderSummaryBox(){
+      summaryBox.innerHTML = '';
+      const tier = state.global.tier;
+
+      const selectedMainLabels = [...state.selection.main.values()].map(k => LABELS[k] || k);
+      const selectedMainTotal = selectedMainLabels.reduce((s,lab)=> s + getPrice(lab, tier), 0);
+
+      const selectedServicesLabels = [...state.selection.services.values()];
+      const selectedServicesTotal = selectedServicesLabels.reduce((s,lab)=> s + getPrice(lab, tier), 0);
+
+      const extraQty = Number(state.global.extraUsers||0);
+      const extraUnit = Number(EXTRA_USER_PRICES[tier] || 0);
+      const extraTotal = extraQty * extraUnit;
+
+      if (state.global.packageMode) {
+        const unionCount = new Set([...state.ownedMain, ...state.selection.main]).size;
+        const discount = bundleDiscount(unionCount);
+        const compensation = computeCompensation(); // 0 jeśli /company-billing nie działa
+        const payable = Math.max(0, selectedMainTotal + selectedServicesTotal + extraTotal - discount + compensation);
+
+        summaryBox.append(
+          h('div',{class:'totals'},
+            h('div',{}, `Nowe moduły (łącznie): ${money(selectedMainTotal)}`),
+            h('div',{}, `Usługi (łącznie): ${money(selectedServicesTotal)}`),
+            h('div',{}, `Dodatkowi użytkownicy: ${extraQty} × ${money(extraUnit)} = ${money(extraTotal)}`),
+            h('div',{}, `Rabat pakietowy: -${money(discount)}`),
+            h('div',{}, `Rekompensata: +${money(compensation)}`),
+            h('div',{class:'totals-grand'}, `Razem (est.): ${money(payable)}`)
+          )
+        );
+        return;
+      }
+
+      // Pakiet OFF → rozbicie linii (bez kompensaty)
+      const list = h('div',{class:'li-table'});
+      list.append(rowLi('Pozycja','Qty','Cena jedn.','Rabat','Suma', true));
+      selectedMainLabels.forEach(lab=>{
+        const price = getPrice(lab, tier);
+        list.append(rowLi(lab,'1',money(price),'—',money(price)));
+      });
+      selectedServicesLabels.forEach(lab=>{
+        const price = getPrice(lab, tier);
+        list.append(rowLi(lab,'1',money(price),'—',money(price)));
+      });
+      if (extraQty>0){
+        list.append(rowLi('Dodatkowi użytkownicy', String(extraQty), money(extraUnit), '—', money(extraTotal)));
+      }
+      summaryBox.append(list);
+
+      const discount = bundleDiscount(state.selection.main.size);
+      const payable = Math.max(0, selectedMainTotal + selectedServicesTotal + extraTotal - discount);
+      summaryBox.append(
+        h('div',{class:'totals'},
+          h('div',{}, `Rabat pakietowy (tylko nowe): -${money(discount)}`),
+          h('div',{class:'totals-grand'}, `Razem (est.): ${money(payable)}`)
+        )
+      );
+
+      function rowLi(a,b,c,d,e,head=false){
+        const r = h('div',{class:'li-row'+(head?' li-head':'')});
+        r.append(h('div',{},a),h('div',{},b),h('div',{},c),h('div',{},d),h('div',{},e));
+        return r;
+      }
+    }
   }
 
-  // Widok 3: podsumowanie
+  // ===== Widok 3: podsumowanie (placeholder — by się nie sypało) =====
   function viewSummary(){
     const w = h('div',{class:'view'});
     w.appendChild(h('h2',{},'Podsumowanie'));
-    w.appendChild(h('button',{class:'btn', type:'button', onclick:()=>go('builder')},'← Wybierz inną firmę'));
+    w.appendChild(h('div',{class:'muted'}, 'Ten widok pokaże Deal i Quotes po podłączeniu endpointów. Na razie skupmy się, żeby CRM się ładował bez błędów.'));
+    w.appendChild(h('button',{class:'btn', type:'button', onclick:()=>go('products')},'← Wróć do kreatora'));
     $app.innerHTML='';
     $app.appendChild(w);
   }
 
-  function init() {
+  // ===== Init =====
+  function init(){
     $app = document.getElementById('app');
-    const raw = $app.getAttribute('data-endpoints') || '{}';
-    const endpointsObj = JSON.parse(raw);
-    const base = endpointsObj.base || '';
+    if (!$app) { console.error('Brak #app'); return; }
+
+    let cfg = {};
+    try {
+      cfg = JSON.parse($app.getAttribute('data-endpoints') || '{}');
+    } catch(e){
+      lastError = 'Zły JSON w data-endpoints';
+    }
+
+    const base = cfg.base || cfg.api || '';
     ep = {
-      search: `${base}/companies-search`,
-      overview: `${base}/company-overview`,
-      catalog: `${base}/catalog`
+      base,
+      health: base ? `${base.replace(/\/+$/,'')}/health` : '',
+      search: base ? `${base}/companies-search` : '',
+      overview: base ? `${base}/company-overview` : '',
+      catalog: base ? `${base}/catalog` : '',
+      companyBilling: base ? `${base}/company-billing` : '' // opcjonalny
     };
+
+    renderDiagnostics(false);
+    if (ep.health) pingHealth();
     go('builder');
   }
 
