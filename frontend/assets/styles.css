@@ -201,4 +201,28 @@ label{cursor:pointer}
 }
 .pill--selected{ background:#e8f6ff; border-color:#cfe9ff; color:var(--brand); }
 .pill--owned{ background:#e8f5e9; border-color:#bfe8c9; color:var(--success); }
+/* Pasek akcji podsumowania */
+.summary-bar{display:flex;gap:12px;margin:8px 0 16px}
+.btn.btn-secondary{
+  background:linear-gradient(180deg,#e8eef7,#dbe7ff);
+  color:var(--brand); box-shadow:var(--shadow);
+}
 
+/* Akordeon Quotes */
+.accordion{display:grid;gap:10px}
+.acc-item{
+  background:var(--card); border:1px solid var(--line); border-radius:var(--radius-lg);
+  box-shadow:var(--shadow); padding:0 12px;
+}
+.acc-item>summary{
+  cursor:pointer; padding:14px 4px; font-weight:800; outline:none; list-style:none;
+}
+.acc-item>summary::-webkit-details-marker{display:none}
+.acc-body{padding:0 4px 14px}
+
+/* Tabela pozycji */
+.li-table{display:grid;gap:6px;margin-top:6px}
+.li-row{display:grid;grid-template-columns:2fr 70px 140px 160px 160px;gap:8px;align-items:center}
+.li-head{font-weight:800;color:var(--ink-2)}
+.totals{margin-top:12px;border-top:1px dashed var(--line);padding-top:10px;display:grid;gap:4px}
+.totals-grand{font-weight:800;font-size:1.1rem}
