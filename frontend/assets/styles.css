@@ -153,4 +153,52 @@ label{cursor:pointer}
   color:var(--brand);
   margin:0;
 }
+/* Ustawienia globalne */
+.settings{
+  background:var(--card); border:1px solid var(--line); border-radius:var(--radius-lg);
+  padding:16px; box-shadow:var(--shadow); margin:12px 0 22px;
+}
+.row-inline{ display:flex; align-items:center; gap:12px; margin:8px 0; }
+.select{
+  padding:10px 12px; border:1px solid var(--line); border-radius:10px; background:#fff;
+  font-weight:600;
+}
+
+/* Kafelki (produkty i usługi) */
+.tiles{ display:flex; flex-wrap:wrap; gap:12px; }
+.tile{
+  position:relative;
+  padding:14px 16px;
+  min-width:210px;
+  background:#fff;
+  border:1px solid var(--line);
+  border-radius:14px;
+  box-shadow:var(--shadow);
+  font-weight:800;
+  color:var(--ink);
+  cursor:pointer;
+  transition:transform .12s ease, box-shadow .12s ease, border-color .12s ease, background .12s ease;
+}
+.tile:hover{ transform:translateY(-1px); }
+.tile--selected{
+  background:linear-gradient(180deg,#f1faff,#e7f4ff);
+  border-color:#cfe9ff;
+  box-shadow:inset 0 0 0 2px rgba(14,165,233,.25), var(--shadow);
+}
+.tile--owned{
+  background:#eef9f0;
+  border-color:#bfe8c9;
+  cursor:not-allowed;
+  box-shadow:inset 0 0 0 2px rgba(34,197,94,.25), var(--shadow);
+}
+
+/* Pigułki/etykiety */
+.pill{
+  position:absolute; top:-10px; right:-10px;
+  background:#fff; border:1px solid var(--line);
+  border-radius:999px; padding:.2rem .5rem; font-size:.75rem;
+  box-shadow:var(--shadow);
+}
+.pill--selected{ background:#e8f6ff; border-color:#cfe9ff; color:var(--brand); }
+.pill--owned{ background:#e8f5e9; border-color:#bfe8c9; color:var(--success); }
 
