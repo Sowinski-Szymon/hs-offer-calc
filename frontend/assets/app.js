@@ -401,22 +401,12 @@
 
       // Widok tabeli:
       if (state.global.packageMode) {
-        // TYLKO pozycja i łączna kwota (bez ceny jedn., bez qty)
-        const list = h('div',{class:'li-table'});
-        list.append(rowLi2('Pozycja','Suma', true));
-
-        selectedMainLabels.forEach(lab=>{
-          const price = getPriceByLabel(lab, tier);
-          list.append(rowLi2(lab, money(price)));
-        });
-        selectedServiceLabels.forEach(lab=>{
-          const price = getPriceByLabel(lab, tier);
-          list.append(rowLi2(lab, money(price)));
-        });
-        if (extraQty>0){
-          list.append(rowLi2(`Dodatkowi użytkownicy (${extraQty})`, money(extraTotal)));
-        }
-        summaryBox.append(list);
+        // ✅ TYLKO lista pozycji (bez kolumny „Suma” i bez cen)
+        const ul = h('ul',{class:'list-plain'});
+        selectedMainLabels.forEach(lab=> ul.append(h('li',{}, lab)));
+        selectedServiceLabels.forEach(lab=> ul.append(h('li',{}, lab)));
+        if (extraQty>0) ul.append(h('li',{}, `Dodatkowi użytkownicy (${extraQty})`));
+        summaryBox.append(ul);
 
       } else {
         // Standardowa tabela z ceną jedn. (bez rabatów na liniach)
@@ -456,6 +446,7 @@
         r.append(h('div',{},a),h('div',{},b),h('div',{},c),h('div',{},d));
         return r;
       }
+      // rowLi2 zostawiamy, choć nieużywane po tej zmianie – nie wpływa na resztę
       function rowLi2(a,b,head=false){
         const r = h('div',{class:'li-row'+(head?' li-head':'')});
         r.style.gridTemplateColumns = '1fr 160px';
