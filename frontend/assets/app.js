@@ -1,9 +1,10 @@
 (() => {
+  // ====== Globals ======
   let $app = null;
   let ep = {};
   let lastError = '';
 
-  // ===== Konfiguracja cen =====
+  // ====== Pricing ======
   const PRICING_MATRIX = {
     "ePublink Budżet": { "Tier1": 6990, "Tier2": 9590, "Tier3": 11390, "Tier4": 33790 },
     "ePublink SWB":    { "Tier1": 2590, "Tier2": 2790, "Tier3": 3290, "Tier4": 3290 },
@@ -16,7 +17,7 @@
   const EXTRA_USER_PRODUCT_ID = '163198115623';
   const EXTRA_USER_PRICES = { Tier1: 590, Tier2: 690, Tier3: 890, Tier4: 990 };
 
-  // ===== Etykiety =====
+  // ====== Labels ======
   const LABELS = {
     WPF: 'ePublink WPF',
     BUDZET: 'ePublink Budżet',
@@ -24,13 +25,12 @@
     SWB: 'ePublink SWB'
   };
   const TIER_LABEL = { Tier1: 'Solo', Tier2: 'Plus', Tier3: 'Pro', Tier4: 'Max' };
-  const TIER_CODE = { Solo: 'Tier1', Plus: 'Tier2', Pro: 'Tier3', Max: 'Tier4' };
 
-  // ===== Stan =====
+  // ====== State ======
   const state = {
     company: null,
     catalog: { mainProducts: [], services: [] },
-    overview: null,               // { company, owned:{main,services} }
+    overview: null,               // { company, owned:{main,services}, companyDates? }
     billing: { isPackageOnCompany:false, lastNet:{} }, // z /company-billing (opcjonalny)
     ownedMain: new Set(),         // klucze: WPF/BUDZET/UMOWY/SWB
     selection: { main: new Set(), services: new Set() },
@@ -38,40 +38,36 @@
     router: { page: 'builder' }
   };
 
-  // ===== Utils =====
+  // ====== Utils ======
   function h(tag, attrs = {}, ...children) {
     const el = document.createElement(tag);
     for (const [k,v] of Object.entries(attrs)) {
       if (k === 'class') el.className = v;
-      else if (k === 'onclick' || k === 'onchange' || k === 'oninput') el[k] = v;
+      else if (k === 'onclick' || k === 'onchange' || k === 'oninput') el[k] = v; // tylko małe litery
       else if (v !== null && v !== undefined) el.setAttribute(k, v);
     }
     children.flat().forEach(c => el.appendChild(typeof c === 'string' ? document.createTextNode(c) : c));
     return el;
   }
+
   async function api(url, opts) {
-    try{
-      const r = await fetch(url, opts);
-      if (!r.ok) {
-        const t = await r.text().catch(()=>String(r.status));
-        throw new Error(`${r.status} ${t}`);
-      }
-      return await r.json();
-    }catch(e){
-      lastError = String(e && e.message || e);
-      renderDiagnostics(); // pokaż błąd
-      throw e;
+    const r = await fetch(url, opts);
+    if (!r.ok) {
+      const t = await r.text().catch(()=>String(r.status));
+      throw new Error(`${r.status} ${t}`);
     }
+    return r.json();
   }
+
   function fmtDate(val) {
     if (val === null || val === undefined || val === '') return '—';
     const n = Number(val);
-    const d = isNaN(n) ? new Date(String(val)) : new Date(n);
+    const d = isNaN(n) ? new Date(String(val)) : new Date(n); // HubSpot date/datetime → ms string
     return isNaN(d.getTime()) ? '—' : d.toLocaleDateString('pl-PL');
   }
+
   function money(v){ return `${Number(v||0).toFixed(2)} PLN`; }
   function bundleDiscount(c){ if(c>=4) return 900; if(c===3) return 600; if(c===2) return 300; return 0; }
-  function tierNice(code){ return TIER_LABEL[code] || code; }
   function getPrice(label, tier){ const m=PRICING_MATRIX[label]; return m ? Number(m[tier]||0) : 0; }
 
   function go(page){
@@ -81,35 +77,67 @@
     if (page === 'summary') viewSummary();
   }
 
-  // ===== Diagnostics bar =====
-  function renderDiagnostics(okHealth=false){
-    let bar = document.getElementById('calc-diagnostics');
-    if (!bar) {
-      bar = document.createElement('div');
-      bar.id = 'calc-diagnostics';
-      bar.style.cssText = 'font:12px/1.4 system-ui,Segoe UI,Arial; background:#f8fafc; border:1px solid #e2e8f0; padding:8px 10px; margin:8px 0; border-radius:8px; color:#0f172a;';
-      $app.parentNode.insertBefore(bar, $app);
-    }
-    const base = ep?.base || '(brak)';
-    bar.innerHTML = `
-      <div><strong>Diagnostics</strong></div>
-      <div>API base: <code>${base}</code> · Health: <b style="color:${okHealth?'#16a34a':'#ef4444'}">${okHealth?'OK':'N/A'}</b></div>
-      ${lastError ? `<div>Last error: <span style="color:#b91c1c">${escapeHtml(lastError)}</span></div>` : ''}
-    `;
-  }
-  function escapeHtml(s){ return String(s).replace(/[&<>"']/g,m=>({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' }[m])); }
+  // ====== Dates helpers (twarde internale) ======
+  // Szuka w kolejności: owned.main[].nextBillingDate → overview.companyDates → surowe company.*
+  function getOwnedEndDate(key){
+    const fromList = (state.overview?.owned?.main || []).find(x => x.key === key)?.nextBillingDate;
+    if (fromList) return fromList;
 
-  async function pingHealth(){
-    if (!ep.health) { renderDiagnostics(false); return; }
-    try{
-      await api(ep.health);
-      renderDiagnostics(true);
-    }catch(e){
-      renderDiagnostics(false);
-    }
+    const cd = state.overview?.companyDates;
+    if (cd && cd[key]) return cd[key];
+
+    const c = state.overview?.company || {};
+    if (key === 'WPF')    return c.wpf_next_billing_date || null;
+    if (key === 'BUDZET') return c.best_next_billing_date || null; // exact internal
+    if (key === 'UMOWY')  return c.umowy_next_billing_date || null;
+    if (key === 'SWB')    return c.swb_next_billing_date || null;
+    return null;
+  }
+  function getPackEndDate(){
+    const c = state.overview?.company || {};
+    return c.pack_next_billing_date || null; // exact internal
   }
 
-  // ===== Widok 1: wybór firmy =====
+  // ====== Compensation ======
+  function daysBetweenISO(startISO, endVal){
+    if(!startISO || !endVal) return 0;
+    const s = new Date(startISO+'T00:00:00');
+    const n = Number(endVal);
+    const e = isNaN(n) ? new Date(String(endVal)) : new Date(n);
+    const diff = Math.ceil((e - s) / (1000*60*60*24));
+    return Math.max(0, diff);
+  }
+
+  // kompensata liczona TYLKO gdy Pakiet=ON
+  function computeCompensation(){
+    if (!state.global.packageMode) return 0;
+    const startISO = state.global.startDate;
+    if (!startISO) return 0;
+
+    const lastNet = state.billing?.lastNet || {};
+    const isPkgOnCompany = !!state.billing?.isPackageOnCompany;
+    const D = 364;
+
+    if (isPkgOnCompany) {
+      const net = Number(lastNet.package || 0);
+      const packEnd = getPackEndDate();
+      if (!net || !packEnd) return 0;
+      const days = daysBetweenISO(startISO, packEnd);
+      return (net / D) * days;
+    }
+
+    let sum = 0;
+    for (const key of state.ownedMain) {
+      const net = Number(lastNet[key] || 0);
+      const end = getOwnedEndDate(key);
+      if (!net || !end) continue;
+      const days = daysBetweenISO(startISO, end);
+      sum += (net / D) * days;
+    }
+    return sum;
+  }
+
+  // ====== View: Company picker ======
   function viewCompanyPicker(){
     const input = h('input',{
       class:'inp',
@@ -126,7 +154,6 @@
       t = setTimeout(async () => {
         if (q.length<2){ list.innerHTML=''; info.textContent='Wpisz minimum 2 znaki.'; return; }
         try{
-          info.textContent = 'Szukam...';
           const results = await api(`${ep.search}?query=${encodeURIComponent(q)}`);
           list.innerHTML = '';
           info.textContent = results.length ? '' : 'Brak wyników.';
@@ -139,7 +166,7 @@
             list.appendChild(row);
           });
         }catch(e){
-          info.textContent = 'Błąd wyszukiwania firm (patrz Diagnostics).';
+          info.textContent = 'Błąd wyszukiwania firm.';
         }
       },300);
     };
@@ -155,75 +182,31 @@
     );
   }
 
-  // ===== Po wyborze firmy =====
+  // ====== After company picked ======
   async function pickCompany(c){
     state.company = c;
-    lastError = '';
     try{
-      // Każdy call łapiemy osobno, żeby UI poszło dalej nawet jak 1 padnie
-      const promises = [];
-      promises.push(api(`${ep.overview}?companyId=${encodeURIComponent(c.id)}`).then(r=>state.overview=r));
-      promises.push(api(ep.catalog).then(r=>state.catalog=r).catch(e=>{ state.catalog={mainProducts:[],services:[]}; throw e; }));
+      const reqs = [
+        api(`${ep.overview}?companyId=${encodeURIComponent(c.id)}`).then(r=>state.overview=r),
+        api(ep.catalog).then(r=>state.catalog=r)
+      ];
       if (ep.companyBilling) {
-        promises.push(api(`${ep.companyBilling}?companyId=${encodeURIComponent(c.id)}`).then(r=>state.billing=r).catch(()=>{ state.billing={isPackageOnCompany:false,lastNet:{}}; }));
+        reqs.push(api(`${ep.companyBilling}?companyId=${encodeURIComponent(c.id)}`).then(r=>state.billing=r).catch(()=>{ state.billing={isPackageOnCompany:false,lastNet:{}}; }));
       }
-      await Promise.all(promises);
+      await Promise.all(reqs);
 
       state.ownedMain = new Set((state.overview?.owned?.main||[]).map(x=>x.key));
-      state.global.packageMode = state.ownedMain.size > 0;
+      state.global.packageMode = state.ownedMain.size > 0; // domyślnie ON jeśli coś mają
       state.global.startDate = new Date().toISOString().slice(0,10);
 
       go('products');
     }catch(e){
-      alert('Nie udało się pobrać danych z API. Sprawdź Diagnostics powyżej.');
+      alert('Nie udało się pobrać danych firmy/katalogu.');
       go('builder');
     }
   }
 
-  // ===== Kompensata (liczona tylko gdy Pakiet=ON) =====
-  function daysBetweenISO(startISO, endVal){
-    if(!startISO || !endVal) return 0;
-    const s = new Date(startISO+'T00:00:00');
-    const n = Number(endVal);
-    const e = isNaN(n) ? new Date(String(endVal)) : new Date(n);
-    const diff = Math.ceil((e - s) / (1000*60*60*24));
-    return Math.max(0, diff);
-  }
-  function computeCompensation(){
-    if (!state.global.packageMode) return 0;
-    const startISO = state.global.startDate;
-    if (!startISO) return 0;
-
-    const ov = state.overview || {};
-    const lastNet = state.billing?.lastNet || {};
-    const isPkgOnCompany = !!state.billing?.isPackageOnCompany;
-
-    // daty końca z overview.owned.main (API musi je zwrócić)
-    const nextDatesByKey = {};
-    (ov?.owned?.main||[]).forEach(x => { nextDatesByKey[x.key] = x.nextBillingDate || null; });
-
-    const D = 364;
-
-    if (isPkgOnCompany && ov?.company?.packNextBillingDate) {
-      const net = Number(lastNet.package || 0);
-      if (!net) return 0;
-      const days = daysBetweenISO(startISO, ov.company.packNextBillingDate);
-      return (net / D) * days;
-    }
-
-    // firma nie jest w pakiecie -> sumuj za posiadane moduły
-    let sum = 0;
-    for (const key of state.ownedMain) {
-      const net = Number(lastNet[key] || 0);
-      const end = nextDatesByKey[key];
-      if (!net || !end) continue;
-      const days = daysBetweenISO(startISO, end);
-      sum += (net / D) * days;
-    }
-    return sum;
-  }
-
-  // ===== Widok 2: kreator produktów =====
+  // ====== View: Product picker ======
   function viewProductPicker(){
     const wrap = h('div',{class:'view'});
 
@@ -238,7 +221,7 @@
       const label = LABELS[item.key] || item.key;
       list.appendChild(h('div',{class:'owned-row'},
         h('span',{}, label),
-        h('span',{style:'color:#64748b;'}, fmtDate(item.nextBillingDate))
+        h('span',{style:'color:#64748b;'}, fmtDate(getOwnedEndDate(item.key)))
       ));
     });
     if (!list.children.length) list.appendChild(h('div',{class:'muted'},'Brak posiadanych produktów w CRM.'));
@@ -292,7 +275,7 @@
           if (isOwned) return;
           if (state.selection.main.has(mp.key)) state.selection.main.delete(mp.key);
           else state.selection.main.add(mp.key);
-          renderTilesAndSummary(mainBar, svcBar, summaryBox); // odśwież
+          renderTilesAndSummary();
         }
       });
       mainBar.appendChild(tile);
@@ -310,7 +293,7 @@
         onclick: () => {
           if (selected) state.selection.services.delete(svc.key);
           else state.selection.services.add(svc.key);
-          renderTilesAndSummary(mainBar, svcBar, summaryBox);
+          renderTilesAndSummary();
         }
       });
       svcBar.appendChild(tile);
@@ -328,9 +311,17 @@
     $app.appendChild(wrap);
     renderSummaryBox();
 
-    function renderTilesAndSummary(mb, sb, sum){
-      // przerysuj kafelki (dodaj „Wybrany”)
-      mb.querySelectorAll('.tile').forEach(el=>el.remove());
+    // helpers for this view
+    function tileBtn({label, selected, owned, onclick}){
+      const b = h('button',{class:`tile ${selected?'tile--selected':''} ${owned?'tile--owned':''}`, type:'button', onclick}, label);
+      if (owned) b.appendChild(h('span',{class:'pill pill--owned'},'Posiadany'));
+      else if (selected) b.appendChild(h('span',{class:'pill pill--selected'},'Wybrany'));
+      return b;
+    }
+
+    function renderTilesAndSummary(){
+      // przerysuj kafelki i podsumowanie
+      mainBar.innerHTML = '';
       (state.catalog?.mainProducts||[]).forEach(mp=>{
         const isOwned = state.ownedMain.has(mp.key);
         const isSelected = state.selection.main.has(mp.key);
@@ -342,13 +333,13 @@
             if (isOwned) return;
             if (state.selection.main.has(mp.key)) state.selection.main.delete(mp.key);
             else state.selection.main.add(mp.key);
-            renderTilesAndSummary(mb, sb, sum);
+            renderTilesAndSummary();
           }
         });
-        mb.appendChild(tile);
+        mainBar.appendChild(tile);
       });
 
-      sb.querySelectorAll('.tile').forEach(el=>el.remove());
+      svcBar.innerHTML = '';
       (state.catalog?.services||[]).forEach(svc=>{
         const selected = state.selection.services.has(svc.key);
         const tile = tileBtn({
@@ -358,20 +349,13 @@
           onclick: () => {
             if (selected) state.selection.services.delete(svc.key);
             else state.selection.services.add(svc.key);
-            renderTilesAndSummary(mb, sb, sum);
+            renderTilesAndSummary();
           }
         });
-        sb.appendChild(tile);
+        svcBar.appendChild(tile);
       });
 
       renderSummaryBox();
-    }
-
-    function tileBtn({label, selected, owned, onclick}){
-      const b = h('button',{class:`tile ${selected?'tile--selected':''} ${owned?'tile--owned':''}`, type:'button', onclick}, label);
-      if (owned) b.appendChild(h('span',{class:'pill pill--owned'},'Posiadany'));
-      else if (selected) b.appendChild(h('span',{class:'pill pill--selected'},'Wybrany'));
-      return b;
     }
 
     function renderSummaryBox(){
@@ -384,14 +368,14 @@
       const selectedServicesLabels = [...state.selection.services.values()];
       const selectedServicesTotal = selectedServicesLabels.reduce((s,lab)=> s + getPrice(lab, tier), 0);
 
-      const extraQty = Number(state.global.extraUsers||0);
+      const extraQty  = Number(state.global.extraUsers||0);
       const extraUnit = Number(EXTRA_USER_PRICES[tier] || 0);
-      const extraTotal = extraQty * extraUnit;
+      const extraTotal= extraQty * extraUnit;
 
       if (state.global.packageMode) {
         const unionCount = new Set([...state.ownedMain, ...state.selection.main]).size;
         const discount = bundleDiscount(unionCount);
-        const compensation = computeCompensation(); // 0 jeśli /company-billing nie działa
+        const compensation = computeCompensation(); // liczy wg dat z getOwnedEndDate / getPackEndDate
         const payable = Math.max(0, selectedMainTotal + selectedServicesTotal + extraTotal - discount + compensation);
 
         summaryBox.append(
@@ -440,40 +424,34 @@
     }
   }
 
-  // ===== Widok 3: podsumowanie (placeholder — by się nie sypało) =====
+  // ====== View: Summary (placeholder do czasu podpięcia deal/quotes) ======
   function viewSummary(){
     const w = h('div',{class:'view'});
     w.appendChild(h('h2',{},'Podsumowanie'));
-    w.appendChild(h('div',{class:'muted'}, 'Ten widok pokaże Deal i Quotes po podłączeniu endpointów. Na razie skupmy się, żeby CRM się ładował bez błędów.'));
+    w.appendChild(h('div',{class:'muted'}, 'Widok deal/quotes dołączymy po potwierdzeniu, że CRM zwraca daty i kalkulacje są ok.'));
     w.appendChild(h('button',{class:'btn', type:'button', onclick:()=>go('products')},'← Wróć do kreatora'));
     $app.innerHTML='';
     $app.appendChild(w);
   }
 
-  // ===== Init =====
+  // ====== Init ======
   function init(){
     $app = document.getElementById('app');
-    if (!$app) { console.error('Brak #app'); return; }
+    if (!$app) return;
 
     let cfg = {};
-    try {
-      cfg = JSON.parse($app.getAttribute('data-endpoints') || '{}');
-    } catch(e){
-      lastError = 'Zły JSON w data-endpoints';
-    }
+    try { cfg = JSON.parse($app.getAttribute('data-endpoints') || '{}'); }
+    catch(e){ cfg = {}; }
 
     const base = cfg.base || cfg.api || '';
     ep = {
       base,
-      health: base ? `${base.replace(/\/+$/,'')}/health` : '',
       search: base ? `${base}/companies-search` : '',
       overview: base ? `${base}/company-overview` : '',
       catalog: base ? `${base}/catalog` : '',
-      companyBilling: base ? `${base}/company-billing` : '' // opcjonalny
+      companyBilling: base ? `${base}/company-billing` : '' // opcjonalny; jeśli brak, kompensata wyjdzie 0
     };
 
-    renderDiagnostics(false);
-    if (ep.health) pingHealth();
     go('builder');
   }
 
