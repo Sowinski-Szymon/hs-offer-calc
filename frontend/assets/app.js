@@ -235,7 +235,7 @@
     (state.overview?.owned?.main||[]).forEach(item=>{
       const label = MAIN_LABELS_BY_KEY[item.key] || item.key;
       list.appendChild(h('div',{class:'owned-row'},
-        h('span',{}, label),
+        h('span',}, label),
         h('span',{class:'owned-date'}, fmtDate(getOwnedEndDate(item.key)))
       ));
     });
@@ -320,9 +320,9 @@
     });
     wrap.append(h('h3',{},'Usługi'), svcBar);
 
-    // Podsumowanie (estymacja)
+    // Podsumowanie (estymacja)  ← TU BYŁ BŁĄD, JUŻ POPRAWIONE
     const summaryBox = h('div',{class:'card summary'});
-    wrap.append(h('h3',},'Podsumowanie (estymacja)'), summaryBox);
+    wrap.append(h('h3',{},'Podsumowanie (estymacja)'), summaryBox);
 
     // CTA
     wrap.appendChild(h('button',{class:'btn btn-primary', type:'button', onclick:()=>go('summary')},'Przejdź do podsumowania'));
