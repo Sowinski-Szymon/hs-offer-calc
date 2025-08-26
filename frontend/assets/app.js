@@ -40,7 +40,11 @@
     children.flat().forEach(c => el.appendChild(typeof c === 'string' ? document.createTextNode(c) : c));
     return el;
   }
-  async function api(url, opts) { const r = await fetch(url, opts); if (!r.ok) throw new Error(await r.text()); return r.json(); }
+  async function api(url, opts) {
+    const r = await fetch(url, opts);
+    if (!r.ok) throw new Error(await r.text().catch(()=>String(r.status)));
+    return r.json();
+  }
   function fmtDate(val) { if (val===null||val===undefined||val==='') return '—'; const n=Number(val); const d=isNaN(n)?new Date(String(val)):new Date(n); return isNaN(d.getTime())?'—':d.toLocaleDateString('pl-PL'); }
   function bundleDiscount(c){ if(c>=4) return 900; if(c===3) return 600; if(c===2) return 300; return 0; }
   function computeDiscount(){
@@ -75,7 +79,7 @@
             row.addEventListener('click',()=>pickCompany(r));
             list.appendChild(row);
           });
-        }catch(e){ console.error(e); }
+        }catch(e){ console.error('companies-search', e); }
       },300);
     });
     $app.innerHTML='';
@@ -94,7 +98,6 @@
       state.catalog = catalog;
       state.overview = overview;
 
-      // Tier firmy jeżeli zapisany w CRM – można użyć jako domyślny (opcjonalnie)
       if (overview?.company?.tier) state.global.tier = overview.company.tier;
 
       const ownedKeysFromProps = new Set((overview?.owned?.main||[]).map(x=>x.key));
@@ -201,10 +204,23 @@
 
     // Podsumowanie (display) + CTA: Przejdź do podsumowania
     const summary = h('div',{class:'summary'});
-    const toSummary = h('button',{class:'btn btn-secondary', onClick: async ()=>{
-      await loadSummaryData();
-      go('summary');
-    }}, 'Przejdź do podsumowania');
+    const toSummary = h('button',{
+      class:'btn btn-secondary',
+      type:'button',
+      onClick: async (e)=>{
+        const btn = e.currentTarget;
+        btn.disabled = true; btn.textContent = 'Ładowanie…';
+        try {
+          await loadSummaryData();
+        } catch(err) {
+          console.error('loadSummaryData', err);
+          // przejdziemy do podsumowania i tak; w widoku pokażemy stosowny komunikat
+        } finally {
+          go('summary');
+          // przy przejściu do summary i tak dociągniemy listę quote'ów
+        }
+      }
+    }, 'Przejdź do podsumowania');
 
     wrap.append(h('h3',{},'Podsumowanie'), summary, toSummary);
 
@@ -223,13 +239,11 @@
 
   function buildItemsPayload(){
     const items = [];
-    // Produkty główne – jeden productId per moduł
     (state.catalog.mainProducts||[]).forEach(mp=>{
       if (state.selection.main.has(mp.key)) {
         if (mp.productId) items.push({ productId: mp.productId, qty: 1 });
       }
     });
-    // Usługi (po 1 szt.)
     (state.catalog.services||[]).forEach(svc=>{
       if (state.selection.services.has(svc.key)) {
         if (svc.productId) items.push({ productId: svc.productId, qty: 1 });
@@ -254,7 +268,6 @@
 
   // ===== Summary page =====
   async function loadSummaryData(){
-    // Używamy podanego pipeline ID: "default"
     const pipelineId = 'default';
     const dealResp = await api(`${ep.dealByCompany}?companyId=${encodeURIComponent(state.company.id)}&pipelineId=${encodeURIComponent(pipelineId)}`);
     state.context.deal = dealResp.deal;
@@ -266,10 +279,18 @@
     const w = h('div',{class:'view'});
     w.appendChild(h('h2',{},'Podsumowanie'));
 
+    // container tworzony najpierw (potrzebny w handlerach)
+    const container = h('div',{class:'accordion'});
+
     const bar = h('div',{class:'summary-bar'});
     bar.append(
-      h('button',{class:'btn btn-secondary', onClick:()=>go('builder')},'← Wróć do kreatora'),
-      h('button',{class:'btn', onClick: async ()=>{ await loadSummaryData(); await renderQuotesList(container); }},'Odśwież')
+      h('button',{class:'btn btn-secondary', type:'button', onClick:()=>go('builder')},'← Wróć do kreatora'),
+      h('button',{class:'btn', type:'button', onClick: async ()=>{
+        try{
+          await loadSummaryData();
+          await renderQuotesList(container);
+        }catch(e){ console.error('refresh summary', e); }
+      }},'Odśwież')
     );
     w.appendChild(bar);
 
@@ -296,10 +317,9 @@
     ownerWrap.appendChild(ownerSelect);
     w.appendChild(ownerWrap);
 
-    const container = h('div',{class:'accordion'});
     w.appendChild(container);
 
-    const cta = h('button',{class:'btn', onClick: async ()=>{
+    const cta = h('button',{class:'btn', type:'button', onClick: async ()=>{
       if (!state.context.deal) { alert('Brak deala – nie można utworzyć Quote.'); return; }
       const items = buildItemsPayload();
       const discount = computeDiscount();
@@ -312,7 +332,6 @@
           items,
           discountPLN: discount,
           title: `Oferta – ${state.company.properties.name}`
-          // Tier celowo NIE wysyłany do HS; używasz go później w automatyzacji dealowej
         };
         await api(ep.createQuote, { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(payload) });
         await renderQuotesList(container);
@@ -323,19 +342,28 @@
 
     $app.innerHTML='';
     $app.appendChild(w);
-    renderQuotesList(container).catch(console.error);
+
+    // pierwszy load listy
+    renderQuotesList(container).catch(e=>console.error('renderQuotesList', e));
   }
 
   async function renderQuotesList(container){
     container.innerHTML = '';
     if (!state.context.deal) return;
-    const listResp = await api(`${ep.quotesForDeal}?dealId=${encodeURIComponent(state.context.deal.id)}`);
-    const quotes = listResp.quotes || [];
+    let quotes = [];
+    try{
+      const listResp = await api(`${ep.quotesForDeal}?dealId=${encodeURIComponent(state.context.deal.id)}`);
+      quotes = listResp.quotes || [];
+    }catch(e){
+      container.append(h('div',{class:'muted'},'Nie udało się pobrać listy quote’ów.'));
+      return;
+    }
     if (!quotes.length){ container.append(h('div',{class:'muted'},'Brak quote’ów na tym dealu.')); return; }
+
     for (const q of quotes){
       const sect = h('details',{class:'acc-item'});
       const sum  = h('summary',{}, `${q.name} · ${q.status}`);
-      if (q.publicUrl) sum.append(' · ', h('a',{href:q.publicUrl,target:'_blank'},'otwórz'));
+      if (q.publicUrl) sum.append(' · ', h('a',{href:q.publicUrl,target:'_blank', rel:'noopener'},'otwórz'));
       const body = h('div',{class:'acc-body'}, h('div',{},'Ładowanie pozycji...'));
       sect.append(sum, body);
       container.appendChild(sect);
@@ -348,10 +376,9 @@
 
         const table = h('div',{class:'li-table'});
         table.append(rowLi('Nazwa','Qty','Cena jedn.','Rabat','Suma linii', true));
-        let sumNet = 0, sumDisc = 0;
+        let sumNet = 0;
         items.forEach(it=>{
           sumNet += it.lineTotal;
-          sumDisc += it.discountAmount || 0;
           const discTxt = it.discountAmount ? `-${it.discountAmount.toFixed(2)} PLN${it.discountPercent?` (${it.discountPercent}%)`:''}` : '—';
           table.append(rowLi(
             it.name,
@@ -364,7 +391,7 @@
         body.append(table);
 
         const discountCalc = computeDiscount();
-        const recomp = 0; // tu możesz w przyszłości wliczyć „rekompensatę”
+        const recomp = 0;
         const grand = Math.max(0, sumNet - discountCalc - recomp);
         const totals = h('div',{class:'totals'},
           h('div',{}, `Suma pozycji: ${sumNet.toFixed(2)} PLN`),
