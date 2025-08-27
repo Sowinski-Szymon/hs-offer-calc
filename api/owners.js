@@ -1,8 +1,11 @@
 // /api/owners.js
-const { withCORS } = require('./_lib/cors');
-const { hsFetch } = require('./_lib/hs');
 
-module.exports = withCORS(async (req, res) => {
+// ZMIANA: Użycie 'import' zamiast 'require' i dodanie rozszerzenia .js
+import { withCORS } from './_lib/cors.js';
+import { hsFetch } from './_lib/hs.js';
+
+// ZMIANA: Użycie 'export default' zamiast 'module.exports'
+export default withCORS(async (req, res) => {
   if (req.method === 'OPTIONS') return res.status(204).end();
   if (req.method !== 'GET') return res.status(405).json({ error: 'Method not allowed' });
 
