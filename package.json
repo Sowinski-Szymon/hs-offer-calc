@@ -1,7 +1,7 @@
 {
   "name": "hs-offer-calc-backend",
   "private": true,
-  "type": "commonjs",
+  "type": "module",
   "dependencies": {
     "@hubspot/api-client": "^11.1.0"
   }
