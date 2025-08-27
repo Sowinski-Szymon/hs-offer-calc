@@ -1,5 +1,7 @@
 // /api/catalog.js
-const { withCORS } = require('./_lib/cors');
+
+// ZMIANA: Użycie 'import' zamiast 'require' i dodanie rozszerzenia .js
+import { withCORS } from './_lib/cors.js';
 
 /**
  * Prosty katalog: 1 produkt = 1 productId w HS.
@@ -7,10 +9,10 @@ const { withCORS } = require('./_lib/cors');
  */
 const CATALOG = {
   mainProducts: [
-    { key: 'WPF',    label: 'ePublink WPF',    productId: '156989205705' },
-    { key: 'BUDZET', label: 'ePublink Budżet', productId: '157907854571' },
-    { key: 'UMOWY',  label: 'ePublink Umowy',  productId: '156989205704' },
-    { key: 'SWB',    label: 'ePublink SWB',    productId: '156989205706' }
+    { key: 'WPF',     label: 'ePublink WPF',    productId: '156989205705' },
+    { key: 'BUDZET',  label: 'ePublink Budżet', productId: '157907854571' },
+    { key: 'UMOWY',   label: 'ePublink Umowy',  productId: '156989205704' },
+    { key: 'SWB',     label: 'ePublink SWB',    productId: '156989205706' }
   ],
   services: [
     { key: 'OBS_WPF',     label: 'Kompleksowa obsługa WPF', productId: '157907854575' },
@@ -19,7 +21,8 @@ const CATALOG = {
   ]
 };
 
-module.exports = withCORS(async (req, res) => {
+// ZMIANA: Użycie 'export default' zamiast 'module.exports'
+export default withCORS(async (req, res) => {
   if (req.method === 'OPTIONS') return res.status(204).end();
   if (req.method !== 'GET') return res.status(405).json({ error: 'Method not allowed' });
   return res.status(200).json(CATALOG);
