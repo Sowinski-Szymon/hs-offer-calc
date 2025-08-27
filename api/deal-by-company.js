@@ -1,6 +1,6 @@
 // /api/deal-by-company.js
 
-import { withCORS } from '../_lib/cors.js';
+import { withCORS } from './_lib/cors.js';
 import { Client } from '@hubspot/api-client';
 
 async function handler(req, res) {
