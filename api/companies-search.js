@@ -1,8 +1,10 @@
-const { withCORS } = require('./_lib/cors');
+// ZMIANA: Użycie 'import' zamiast 'require' i dodanie rozszerzenia .js
+import { withCORS } from './_lib/cors.js';
 
 const HS_BASE = 'https://api.hubapi.com';
 
-module.exports = withCORS(async (req, res) => {
+// ZMIANA: Użycie 'export default' zamiast 'module.exports'
+export default withCORS(async (req, res) => {
   if (req.method === 'OPTIONS') return res.status(204).end();
   if (req.method !== 'GET') return res.status(405).json({ error: 'Method not allowed' });
 
