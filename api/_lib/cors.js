@@ -1,4 +1,5 @@
-// /api/_lib/cors.js (CommonJS)
+// /api/_lib/cors.js (ESM)
+
 function norm(o) {
   if (!o) return '';
   o = o.trim().toLowerCase();
@@ -8,6 +9,7 @@ function norm(o) {
   if (o.startsWith('http://www.'))  o = 'http://'  + o.slice(11);
   return o;
 }
+
 function match(origin, list) {
   const O = norm(origin);
   return list.some(raw => {
@@ -18,7 +20,8 @@ function match(origin, list) {
   });
 }
 
-exports.withCORS = function withCORS(handler) {
+// ZMIANA: Użycie 'export' przed deklaracją funkcji zamiast 'exports.withCORS ='
+export function withCORS(handler) {
   return async (req, res) => {
     const origin = req.headers.origin || '';
     const list = (process.env.ALLOWED_ORIGINS || process.env.ALLOWED_ORIGIN || '')
@@ -44,7 +47,7 @@ exports.withCORS = function withCORS(handler) {
       return await handler(req, res);
     } catch (e) {
       // ZAWSZE odpowiedz JSON-em z nagłówkami CORS
-      return res.status(500).json({ error: 'server', detail: String(e && e.message || e) });
+      return res.status(500).json({ error: 'server', detail: String(e?.message || e) });
     }
   };
 };
