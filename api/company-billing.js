@@ -1,13 +1,16 @@
 // /api/company-billing
-const { withCORS } = require('./_lib/cors');
-const { hsFetch } = require('./_lib/hs');
+
+// ZMIANA: Użycie 'import' zamiast 'require' i dodanie rozszerzenia .js
+import { withCORS } from './_lib/cors.js';
+import { hsFetch } from './_lib/hs.js';
 
 /**
  * Zwraca dane do kompensaty:
  * - isPackageOnCompany: boolean (company.properties.pakiet)
  * - lastNet: { WPF, BUDZET, UMOWY, SWB } lub { package }
  */
-module.exports = withCORS(async (req, res) => {
+// ZMIANA: Użycie 'export default' zamiast 'module.exports'
+export default withCORS(async (req, res) => {
   if (req.method === 'OPTIONS') return res.status(204).end();
   if (req.method !== 'GET') return res.status(405).json({ error: 'Method not allowed' });
 
@@ -16,7 +19,7 @@ module.exports = withCORS(async (req, res) => {
 
   // Internal names wg Twojej specyfikacji
   const COMPANY_PROPS = [
-    'pakiet',                       // checkbox
+    'pakiet',                 // checkbox
     'wpf_ostatnia_faktura',
     'swb_ostatnia_faktura',
     'budzet_ostatnia_faktura',
