@@ -1,6 +1,8 @@
 // /api/company-overview.js
-const { withCORS } = require('./_lib/cors');
-const { hsFetch } = require('./_lib/hs');
+
+// ZMIANA: Użycie 'import' zamiast 'require' i dodanie rozszerzenia .js
+import { withCORS } from './_lib/cors.js';
+import { hsFetch } from './_lib/hs.js';
 
 // Twarde mapowanie właściwości dat
 const DATE_PROPS = {
@@ -25,10 +27,8 @@ function normalizeProductName(input) {
   if (/\bWPF\b/.test(s)) return 'WPF';
   if (/\bUMOWY?\b/.test(s)) return 'UMOWY';
   if (/\bSWB\b/.test(s)) return 'SWB';
-  if (/\bBUDZET\b/.test(s) || /\bBUDZET\b/.test(s)) return 'BUDZET'; // po diakrytykach i tak mamy BUDZET
+  if (/\bBUDZET\b/.test(s)) return 'BUDZET';
 
-  // czasami ktoś wpisze "EPUBLINK SWB" – powyższe to już pokrywa;
-  // jeśli jednak wpadnie coś egzotycznego, zwróć surowe (dla debug)
   return s;
 }
 
@@ -38,7 +38,8 @@ function pick(obj, prop) {
   return (v !== undefined && v !== null && v !== '') ? v : null;
 }
 
-module.exports = withCORS(async (req, res) => {
+// ZMIANA: Użycie 'export default' zamiast 'module.exports'
+export default withCORS(async (req, res) => {
   try {
     if (req.method === 'OPTIONS') return res.status(204).end();
     if (req.method !== 'GET') return res.status(405).json({ error: 'Method not allowed' });
@@ -52,11 +53,7 @@ module.exports = withCORS(async (req, res) => {
       'subscription_tier',
       'aktywne_produkty_glowne',
       'aktywne_uslugi_dodatkowe',
-      DATE_PROPS.WPF,
-      DATE_PROPS.BUDZET,
-      DATE_PROPS.UMOWY,
-      DATE_PROPS.SWB,
-      DATE_PROPS.PACK
+      ...Object.values(DATE_PROPS) // Uproszczone dodawanie wszystkich dat
     ];
 
     const comp = await hsFetch(`/crm/v3/objects/companies/${companyId}?properties=${encodeURIComponent(props.join(','))}`);
@@ -73,26 +70,21 @@ module.exports = withCORS(async (req, res) => {
       ...new Set(
         splitCsv(p.aktywne_produkty_glowne)
           .map(normalizeProductName)
-          .filter(Boolean)
+          .filter(key => Object.keys(DATE_PROPS).includes(key)) // Upewnij się, że klucz jest poprawny
       )
     ];
 
-    // Znormalizuj usługi (zostawiam surowe, ale równie dobrze możesz tu też normalizować pod własny klucz)
+    // Znormalizuj usługi
     const ownedServices = [
       ...new Set(splitCsv(p.aktywne_uslugi_dodatkowe))
     ];
 
     // Zbuduj listę "owned.main" z datami z właściwości firmy
-    const mainWithBilling = ownedMainKeys.map(key => {
-      let nextBillingDate = null;
-      if (key === 'WPF')    nextBillingDate = pick(p, DATE_PROPS.WPF);
-      if (key === 'BUDZET') nextBillingDate = pick(p, DATE_PROPS.BUDZET);
-      if (key === 'UMOWY')  nextBillingDate = pick(p, DATE_PROPS.UMOWY);
-      if (key === 'SWB')    nextBillingDate = pick(p, DATE_PROPS.SWB);
-      return { key, nextBillingDate };
-    });
+    const mainWithBilling = ownedMainKeys.map(key => ({
+      key,
+      nextBillingDate: pick(p, DATE_PROPS[key])
+    }));
 
-    // Company-level: tier i data pakietu
     const packNext = pick(p, DATE_PROPS.PACK);
 
     return res.status(200).json({
@@ -100,16 +92,14 @@ module.exports = withCORS(async (req, res) => {
         id: comp.id,
         name: p.name || '',
         tier: p.subscription_tier || null,
-        isPackageOnCompany: false, // jeżeli masz checkbox "pakiet" na company i chcesz go tu zwracać – dodaj go tu
         packNextBillingDate: packNext
       },
       owned: {
-        main: mainWithBilling,   // <- KLUCZE JUŻ SĄ WPF/BUDZET/UMOWY/SWB, daty podbite z właściwości
+        main: mainWithBilling,
         services: ownedServices
-      },
-      deal: null // (jeśli miałeś, usuń – deal robisz osobnym endpointem)
+      }
     });
   } catch (e) {
-    return res.status(500).json({ error: 'company-overview failed', detail: String(e && e.message || e) });
+    return res.status(500).json({ error: 'company-overview failed', detail: String(e?.message || e) });
   }
 });
