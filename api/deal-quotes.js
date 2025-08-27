@@ -1,10 +1,14 @@
 // /api/deal-quotes.js
-const { withCORS } = require('./_lib/cors');
-const { hsFetch } = require('./_lib/hs');
 
-module.exports = withCORS(async (req, res) => {
+// ZMIANA: Użycie 'import' zamiast 'require' i dodanie rozszerzenia .js
+import { withCORS } from './_lib/cors.js';
+import { hsFetch } from './_lib/hs.js';
+
+// ZMIANA: Użycie 'export default' zamiast 'module.exports'
+export default withCORS(async (req, res) => {
   if (req.method === 'OPTIONS') return res.status(204).end();
   if (req.method !== 'GET') return res.status(405).json({ error: 'Method not allowed' });
+
   const { dealId } = req.query;
   if (!dealId) return res.status(400).json({ error: 'dealId required' });
 
@@ -13,7 +17,7 @@ module.exports = withCORS(async (req, res) => {
   const qIds = (assoc?.results || []).map(r => r.to?.id).filter(Boolean);
   if (!qIds.length) return res.status(200).json({ quotes: [] });
 
-  const props = ['hs_title','hs_status','hs_public_url','hs_createdate','hs_expiration_date'];
+  const props = ['hs_title', 'hs_status', 'hs_public_url', 'hs_createdate', 'hs_expiration_date'];
   const batch = await hsFetch(`/crm/v3/objects/quotes/batch/read`, {
     method: 'POST',
     body: JSON.stringify({ properties: props, inputs: qIds.map(id => ({ id })) })
@@ -29,7 +33,7 @@ module.exports = withCORS(async (req, res) => {
   }));
 
   // sort newest first
-  quotes.sort((a,b)=> (b.createdAt && a.createdAt) ? (new Date(b.createdAt)-new Date(a.createdAt)) : 0);
+  quotes.sort((a, b) => (b.createdAt && a.createdAt) ? (new Date(b.createdAt) - new Date(a.createdAt)) : 0);
 
   return res.status(200).json({ quotes });
 });
