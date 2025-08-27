@@ -1,6 +1,9 @@
+// /_lib/hs.js
+
 const HS_BASE = 'https://api.hubapi.com';
 
-async function hsFetch(path, { method = 'GET', body, headers = {} } = {}, attempt = 1) {
+// ZMIANA: Dodanie 'export' przed deklaracją funkcji
+export async function hsFetch(path, { method = 'GET', body, headers = {} } = {}, attempt = 1) {
   const res = await fetch(`${HS_BASE}${path}`, {
     method,
     headers: {
@@ -11,6 +14,7 @@ async function hsFetch(path, { method = 'GET', body, headers = {} } = {}, attemp
     body: body ? JSON.stringify(body) : undefined
   });
 
+  // Obsługa ponawiania zapytań przy błędach serwera lub przekroczeniu limitu
   if (res.status === 429 || (res.status >= 500 && res.status < 600)) {
     if (attempt <= 5) {
       const retryAfter = Number(res.headers.get('Retry-After')) || Math.min(2 ** attempt, 10);
@@ -21,10 +25,12 @@ async function hsFetch(path, { method = 'GET', body, headers = {} } = {}, attemp
 
   if (!res.ok) {
     const txt = await res.text();
+    // Rzucenie błędu, który zostanie złapany w bloku catch w Twoim API
     throw new Error(`${path} → ${res.status} ${txt}`);
   }
 
+  // Zwróć dane w formacie JSON
   return res.json();
 }
 
-module.exports = { hsFetch };
+// ZMIANA: Usunięcie 'module.exports'
