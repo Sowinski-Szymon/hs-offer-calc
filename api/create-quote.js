@@ -1,21 +1,11 @@
 // /api/create-quote.js
-const { withCORS } = require('./_lib/cors');
-const { hsFetch } = require('./_lib/hs');
 
-/**
- * BODY:
- * {
- *   companyId: "xxxx",                // wymagane
- *   dealId?: "yyyy",                  // opcjonalne (skojarzymy quote z dealem)
- *   ownerId?: "12345",                // opcjonalne (domyślnie właściciel deala)
- *   title?: "Oferta – ...",           // opcjonalne
- *   items: [ { productId: "PID", qty: 1 }, ... ],    // wymagane
- *   discountPLN?: 0                   // opcjonalnie dodajemy linię z rabatem kwotowym (ujemna)
- *
- *   // UWAGA: NIE zapisujemy tutaj Tiera – zgodnie z Twoją decyzją
- * }
- */
-module.exports = withCORS(async (req, res) => {
+// ZMIANA: Użycie 'import' zamiast 'require' i dodanie rozszerzenia .js
+import { withCORS } from './_lib/cors.js';
+import { hsFetch } from './_lib/hs.js';
+
+// ZMIANA: Użycie 'export default' zamiast 'module.exports'
+export default withCORS(async (req, res) => {
   try {
     if (req.method === 'OPTIONS') return res.status(204).end();
     if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
@@ -36,7 +26,6 @@ module.exports = withCORS(async (req, res) => {
           ...(ownerId ? { hubspot_owner_id: String(ownerId) } : {})
         },
         associations: [
-          // quote -> company
           { to: { id: String(companyId) }, types: [{ associationCategory: 'HUBSPOT_DEFINED', associationTypeId: 280 }] }
         ]
       })
@@ -59,7 +48,6 @@ module.exports = withCORS(async (req, res) => {
       const { productId, qty } = it;
       if (!productId) continue;
 
-      // line_item z produktem (ceny pobierze HS wg produktu/automatyki)
       const li = await hsFetch(`/crm/v3/objects/line_items`, {
         method: 'POST',
         body: JSON.stringify({
@@ -70,7 +58,6 @@ module.exports = withCORS(async (req, res) => {
         })
       });
 
-      // Połącz line_item z quote
       await hsFetch(`/crm/v4/objects/quotes/${quoteId}/associations/line_items/${li.id}`, {
         method: 'PUT',
         body: JSON.stringify({
@@ -87,7 +74,7 @@ module.exports = withCORS(async (req, res) => {
         body: JSON.stringify({
           properties: {
             name: 'Rabat pakietowy',
-            price: String(-rabat),  // ujemna cena
+            price: String(-rabat),
             quantity: '1'
           }
         })
@@ -109,6 +96,6 @@ module.exports = withCORS(async (req, res) => {
       properties: q.properties || {}
     });
   } catch (e) {
-    return res.status(500).json({ error: 'create-quote failed', detail: String(e && e.message || e) });
+    return res.status(500).json({ error: 'create-quote failed', detail: String(e?.message || e) });
   }
 });
