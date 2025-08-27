@@ -2,9 +2,8 @@
 const { withCORS } = require('./_lib/cors');
 const { hsFetch } = require('./_lib/hs');
 
-// Stałe wg wymagań:
-// const PIPELINE_ID = '1978057944'; // CELOWO WYŁĄCZONE do testów
-// const PRIMARY_COMPANY_ASSOC_ID = 1; // CELOWO WYŁĄCZONE do testów
+// Stałe, które teraz faktycznie będą używane
+const PIPELINE_ID = '1978057944'; // ID potoku, po którym filtrujemy
 
 module.exports = withCORS(async (req, res) => {
   try {
@@ -14,55 +13,74 @@ module.exports = withCORS(async (req, res) => {
     const { companyId } = req.query;
     if (!companyId) return res.status(400).json({ error: 'companyId required' });
 
-    // 1) Pobierz powiązania Company -> Deals
-    const assoc = await hsFetch(`/crm/v4/objects/companies/${companyId}/associations/deals`);
-    
-    // 2) Pobierz ID wszystkich powiązanych deali, BEZ filtrowania.
-    const dealIds = (assoc?.results || [])
-      .map(r => r.to?.id)
-      .filter(Boolean);
+    // 1) Zbuduj zapytanie wyszukiwania, które od razu filtruje i pobiera co trzeba
+    const searchPayload = {
+      // Filtrujemy jednocześnie po dwóch warunkach (łącznik AND)
+      filterGroups: [
+        {
+          filters: [
+            {
+              propertyName: 'associations.company',
+              operator: 'EQ',
+              value: companyId
+            },
+            {
+              propertyName: 'pipeline',
+              operator: 'EQ',
+              value: PIPELINE_ID
+            }
+          ]
+        }
+      ],
+      // Sortujemy, aby mieć pewność, że zawsze dostaniemy ten sam wynik (np. najnowszy)
+      sorts: [{ propertyName: 'hs_lastmodifieddate', direction: 'DESCENDING' }],
+      // Od razu pobieramy potrzebne właściwości
+      properties: ['dealname', 'pipeline', 'hubspot_owner_id'],
+      // Potrzebujemy tylko JEDNEGO wyniku
+      limit: 1
+    };
 
-    if (!dealIds.length) {
-      // Jeśli nie znaleziono ŻADNEGO powiązanego deala, zwróć null.
+    // 2) Wykonaj JEDNO zapytanie do API HubSpot
+    const searchResult = await hsFetch('/crm/v3/objects/deals/search', {
+      method: 'POST',
+      body: JSON.stringify(searchPayload)
+    });
+
+    const foundDeal = searchResult?.results?.[0];
+
+    // Jeśli wyszukiwanie nie zwróciło żadnego deala, kończymy
+    if (!foundDeal) {
       return res.status(200).json({ deal: null });
     }
 
-    // 3) Pobierz PIERWSZY deal z listy, bez sprawdzania pipeline.
-    const firstDealId = dealIds[0];
-    const found = await hsFetch(`/crm/v3/objects/deals/${firstDealId}?properties=dealname,pipeline,hubspot_owner_id`);
-
-    if (!found) {
-      // To się nie powinno zdarzyć, jeśli dealIds[0] istnieje, ale dla bezpieczeństwa.
-      return res.status(200).json({ deal: null });
-    }
-
-    // 4) Pobierz dane właściciela (owner)
+    // 3) Pobierz dane właściciela (ta część pozostaje bez zmian)
     let owner = null;
-    const oid = found?.properties?.hubspot_owner_id;
-    if (oid) {
+    const ownerId = foundDeal.properties.hubspot_owner_id;
+    if (ownerId) {
       try {
-        const o = await hsFetch(`/crm/v3/owners/${encodeURIComponent(oid)}`);
-        owner = { 
-          id: o.id || oid, 
-          name: o?.firstName && o?.lastName ? `${o.firstName} ${o.lastName}` : (o?.firstName || o?.lastName || o?.email || ''), 
-          email: o?.email || null 
+        const ownerData = await hsFetch(`/crm/v3/owners/${encodeURIComponent(ownerId)}`);
+        owner = {
+          id: ownerData.id,
+          name: `${ownerData.firstName} ${ownerData.lastName}`,
+          email: ownerData.email
         };
-      } catch(e) {
-        owner = { id: oid, name: null, email: null };
+      } catch (e) {
+        // Zabezpieczenie, gdyby właściciel nie istniał
+        owner = { id: ownerId, name: 'Nieznany właściciel', email: null };
       }
     }
 
-    // Zwróć znaleziony deal
+    // 4) Zwróć znaleziony deal
     return res.status(200).json({
       deal: {
-        id: found.id,
-        name: found?.properties?.dealname || '',
-        pipelineId: found?.properties?.pipeline || null,
+        id: foundDeal.id,
+        name: foundDeal.properties.dealname || '',
+        pipelineId: foundDeal.properties.pipeline || null,
         owner
       }
     });
 
   } catch (e) {
-    res.status(500).json({ error: 'deal-by-company failed', detail: String(e && e.message || e) });
+    res.status(500).json({ error: 'deal-by-company failed', detail: String(e?.message || e) });
   }
 });
