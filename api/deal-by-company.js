@@ -1,86 +1,86 @@
-// /api/deal-by-company.js
-const { withCORS } = require('./_lib/cors');
-const { hsFetch } = require('./_lib/hs');
+import { Client } from '@hubspot/api-client';
 
-// Stałe, które teraz faktycznie będą używane
-const PIPELINE_ID = '1978057944'; // ID potoku, po którym filtrujemy
+export default async function handler(req, res) {
+  // --- KOREKTA (CORS): Ustawienie nagłówków dla wszystkich odpowiedzi ---
+  // Pozwala na zapytania z dowolnej domeny. W produkcji warto to ograniczyć.
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
 
-module.exports = withCORS(async (req, res) => {
+  // Obsługa zapytania wstępnego CORS
+  if (req.method === 'OPTIONS') {
+    return res.status(200).end();
+  }
+
+  if (req.method !== 'GET') {
+    return res.status(405).json({ error: 'Method Not Allowed' });
+  }
+
   try {
-    if (req.method === 'OPTIONS') return res.status(204).end();
-    if (req.method !== 'GET') return res.status(405).json({ error: 'Method not allowed' });
-
     const { companyId } = req.query;
-    if (!companyId) return res.status(400).json({ error: 'companyId required' });
+    const accessToken = process.env.HUBSPOT_ACCESS_TOKEN;
+    const pipelineId = process.env.PIPELINE_ID;
 
-    // 1) Zbuduj zapytanie wyszukiwania, które od razu filtruje i pobiera co trzeba
-    const searchPayload = {
-      // Filtrujemy jednocześnie po dwóch warunkach (łącznik AND)
-      filterGroups: [
-        {
-          filters: [
-            {
-              propertyName: 'associations.company',
-              operator: 'EQ',
-              value: companyId
-            },
-            {
-              propertyName: 'pipeline',
-              operator: 'EQ',
-              value: PIPELINE_ID
-            }
-          ]
-        }
-      ],
-      // Sortujemy, aby mieć pewność, że zawsze dostaniemy ten sam wynik (np. najnowszy)
+    if (!companyId) {
+      return res.status(400).json({ error: 'Query parameter "companyId" is required.' });
+    }
+    if (!accessToken || !pipelineId) {
+      console.error('Błąd konfiguracji: Brak zmiennych środowiskowych HubSpot.');
+      return res.status(500).json({ error: 'Server configuration error.' });
+    }
+
+    // --- KOREKTA (Import): Użycie "new Client" zamiast "new hubspot.Client" ---
+    const hubspotClient = new Client({ accessToken });
+
+    // --- LOGIKA (Search API): Pozostaje bez zmian, bo jest poprawna i wydajna ---
+    const searchResult = await hubspotClient.crm.deals.searchApi.doSearch({
+      filterGroups: [{
+        filters: [
+          { propertyName: 'associations.company', operator: 'EQ', value: companyId },
+          { propertyName: 'pipeline', operator: 'EQ', value: pipelineId }
+        ]
+      }],
       sorts: [{ propertyName: 'hs_lastmodifieddate', direction: 'DESCENDING' }],
-      // Od razu pobieramy potrzebne właściwości
       properties: ['dealname', 'pipeline', 'hubspot_owner_id'],
-      // Potrzebujemy tylko JEDNEGO wyniku
       limit: 1
-    };
-
-    // 2) Wykonaj JEDNO zapytanie do API HubSpot
-    const searchResult = await hsFetch('/crm/v3/objects/deals/search', {
-      method: 'POST',
-      body: JSON.stringify(searchPayload)
     });
 
-    const foundDeal = searchResult?.results?.[0];
+    const foundDeal = searchResult.results?.[0];
 
-    // Jeśli wyszukiwanie nie zwróciło żadnego deala, kończymy
     if (!foundDeal) {
       return res.status(200).json({ deal: null });
     }
 
-    // 3) Pobierz dane właściciela (ta część pozostaje bez zmian)
-    let owner = null;
+    let ownerDetails = null;
     const ownerId = foundDeal.properties.hubspot_owner_id;
     if (ownerId) {
       try {
-        const ownerData = await hsFetch(`/crm/v3/owners/${encodeURIComponent(ownerId)}`);
-        owner = {
-          id: ownerData.id,
-          name: `${ownerData.firstName} ${ownerData.lastName}`,
-          email: ownerData.email
-        };
-      } catch (e) {
-        // Zabezpieczenie, gdyby właściciel nie istniał
-        owner = { id: ownerId, name: 'Nieznany właściciel', email: null };
+        const ownerData = await hubspotClient.crm.owners.ownersApi.getById(ownerId);
+        // --- KOREKTA (Bezpieczeństwo): Sprawdzenie, czy obiekt ownerData istnieje ---
+        if (ownerData) {
+          ownerDetails = {
+            id: ownerData.id,
+            name: `${ownerData.firstName} ${ownerData.lastName}`,
+            email: ownerData.email
+          };
+        }
+      } catch (ownerError) {
+        console.warn(`Nie udało się pobrać właściciela o ID ${ownerId}.`);
+        ownerDetails = { id: ownerId, name: 'Dane niedostępne', email: null };
       }
     }
 
-    // 4) Zwróć znaleziony deal
     return res.status(200).json({
       deal: {
         id: foundDeal.id,
         name: foundDeal.properties.dealname || '',
         pipelineId: foundDeal.properties.pipeline || null,
-        owner
+        owner: ownerDetails
       }
     });
 
   } catch (e) {
-    res.status(500).json({ error: 'deal-by-company failed', detail: String(e?.message || e) });
+    console.error('--- Błąd krytyczny w funkcji API ---', e.body || e.message);
+    return res.status(500).json({ error: 'An internal server error occurred.' });
   }
-});
+}
