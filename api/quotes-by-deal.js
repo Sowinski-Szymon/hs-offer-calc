@@ -1,9 +1,9 @@
+// ZMIANA: Importujemy cały moduł, aby używać składni `hubspot.Client`
 import { withCORS } from '../_lib/cors.js';
-import { Client } from '@hubspot/api-client';
+import hubspot from '@hubspot/api-client';
 
 export default withCORS(async (req, res) => {
   try {
-    // === KROK 0: Walidacja zapytania ===
     if (req.method === 'OPTIONS') return res.status(204).end();
     if (req.method !== 'GET') return res.status(405).json({ error: 'Method not allowed' });
 
@@ -16,13 +16,14 @@ export default withCORS(async (req, res) => {
         return res.status(500).json({ error: 'Server configuration error.' });
     }
 
-    // === Inicjalizacja klienta HubSpot z poprawnym regionem EU ===
-    const hubspotClient = new Client({ 
+    // ZMIANA: Dodajemy log i używamy składni `new hubspot.Client`
+    console.log(`🚀 Inicjalizacja klienta HubSpot...`);
+    const hubspotClient = new hubspot.Client({ 
       accessToken,
       basePath: 'https://api.hubapi.eu'
     });
 
-    // === KROK 1: Pobierz ID Ofert powiązanych z Dealem ===
+    // Krok 1: Pobierz ID Ofert powiązanych z Dealem
     const assocResponse = await hubspotClient.crm.associations.v4.basicApi.getPage('deals', dealId, 'quotes');
     const quoteIds = (assocResponse.results || []).map(r => r.toObjectId).filter(Boolean);
 
@@ -30,7 +31,7 @@ export default withCORS(async (req, res) => {
       return res.status(200).json({ quotes: [] });
     }
 
-    // === KROK 2: Pobierz szczegóły Ofert ===
+    // Krok 2: Pobierz szczegóły Ofert
     const qProps = ['hs_title', 'hs_status', 'hs_public_url', 'hs_expiration_date', 'hs_createdate', 'hs_total_amount', 'amount'];
     const qBatch = await hubspotClient.crm.quotes.batchApi.read({ 
         properties: qProps, 
@@ -38,7 +39,7 @@ export default withCORS(async (req, res) => {
     });
     const quotesData = qBatch.results || [];
 
-    // === KROK 3: Równolegle pobierz ID Pozycji (Line Items) dla wszystkich Ofert ===
+    // Krok 3: Równolegle pobierz ID Pozycji (Line Items)
     const lineItemAssociationPromises = quotesData.map(q =>
         hubspotClient.crm.associations.v4.basicApi.getPage('quotes', q.id, 'line_items')
     );
@@ -53,7 +54,7 @@ export default withCORS(async (req, res) => {
       liIds.forEach(id => allLineItemIds.add(id));
     });
 
-    // === KROK 4: Pobierz szczegóły Pozycji ===
+    // Krok 4: Pobierz szczegóły Pozycji
     let lineItemsById = new Map();
     if (allLineItemIds.size > 0) {
       const liProps = ['name', 'quantity', 'price', 'hs_product_id', 'amount'];
@@ -64,7 +65,7 @@ export default withCORS(async (req, res) => {
       (liBatch.results || []).forEach(item => lineItemsById.set(item.id, item));
     }
 
-    // === KROK 5: Złóż ostateczną odpowiedź ===
+    // Krok 5: Złóż ostateczną odpowiedź
     const quotes = quotesData.map(r => {
       const relatedLineItemIds = quoteToLineItemIds[r.id] || [];
       const lineItems = relatedLineItemIds.map(liId => {
