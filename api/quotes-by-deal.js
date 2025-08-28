@@ -1,10 +1,9 @@
-// /api/quotes-by-deal.js
-
-import { withCORS } from './_lib/cors.js';
+import { withCORS } from '../_lib/cors.js';
 import { Client } from '@hubspot/api-client';
 
 export default withCORS(async (req, res) => {
   try {
+    // === KROK 0: Walidacja zapytania ===
     if (req.method === 'OPTIONS') return res.status(204).end();
     if (req.method !== 'GET') return res.status(405).json({ error: 'Method not allowed' });
 
@@ -13,17 +12,17 @@ export default withCORS(async (req, res) => {
     
     const accessToken = process.env.HUBSPOT_PRIVATE_APP_TOKEN;
     if (!accessToken) {
-        console.error('KRYTYCZNY BŁĄD: Brak HUBSPOT_PRIVATE_APP_TOKEN w zmiennych środowiskowych.');
+        console.error('KRYTYCZNY BŁĄD: Brak HUBSPOT_PRIVATE_APP_TOKEN w zmiennych środowiskowych Vercel.');
         return res.status(500).json({ error: 'Server configuration error.' });
     }
 
-    // ZMIANA: Dodajemy `basePath`, aby połączyć się z serwerem EU
+    // === Inicjalizacja klienta HubSpot z poprawnym regionem EU ===
     const hubspotClient = new Client({ 
       accessToken,
       basePath: 'https://api.hubapi.eu'
     });
 
-    // Krok 1: Pobierz ID Ofert powiązanych z Dealem
+    // === KROK 1: Pobierz ID Ofert powiązanych z Dealem ===
     const assocResponse = await hubspotClient.crm.associations.v4.basicApi.getPage('deals', dealId, 'quotes');
     const quoteIds = (assocResponse.results || []).map(r => r.toObjectId).filter(Boolean);
 
@@ -31,7 +30,7 @@ export default withCORS(async (req, res) => {
       return res.status(200).json({ quotes: [] });
     }
 
-    // Krok 2: Pobierz szczegóły Ofert
+    // === KROK 2: Pobierz szczegóły Ofert ===
     const qProps = ['hs_title', 'hs_status', 'hs_public_url', 'hs_expiration_date', 'hs_createdate', 'hs_total_amount', 'amount'];
     const qBatch = await hubspotClient.crm.quotes.batchApi.read({ 
         properties: qProps, 
@@ -39,7 +38,7 @@ export default withCORS(async (req, res) => {
     });
     const quotesData = qBatch.results || [];
 
-    // Krok 3: Równolegle pobierz ID Pozycji (Line Items)
+    // === KROK 3: Równolegle pobierz ID Pozycji (Line Items) dla wszystkich Ofert ===
     const lineItemAssociationPromises = quotesData.map(q =>
         hubspotClient.crm.associations.v4.basicApi.getPage('quotes', q.id, 'line_items')
     );
@@ -54,7 +53,7 @@ export default withCORS(async (req, res) => {
       liIds.forEach(id => allLineItemIds.add(id));
     });
 
-    // Krok 4: Pobierz szczegóły Pozycji
+    // === KROK 4: Pobierz szczegóły Pozycji ===
     let lineItemsById = new Map();
     if (allLineItemIds.size > 0) {
       const liProps = ['name', 'quantity', 'price', 'hs_product_id', 'amount'];
@@ -65,7 +64,7 @@ export default withCORS(async (req, res) => {
       (liBatch.results || []).forEach(item => lineItemsById.set(item.id, item));
     }
 
-    // Krok 5: Złóż ostateczną odpowiedź
+    // === KROK 5: Złóż ostateczną odpowiedź ===
     const quotes = quotesData.map(r => {
       const relatedLineItemIds = quoteToLineItemIds[r.id] || [];
       const lineItems = relatedLineItemIds.map(liId => {
@@ -100,11 +99,12 @@ export default withCORS(async (req, res) => {
     return res.status(200).json({ quotes });
 
   } catch (e) {
-    const errorMessage = e.body ? JSON.stringify(e.body) : e.message;
+    const errorMessage = e.body ? JSON.stringify(e.body) : String(e.message || e);
     console.error(`--- BŁĄD w /api/quotes-by-deal.js ---`, errorMessage);
     return res.status(500).json({ 
       error: 'Internal Server Error',
-      detail: 'Failed to fetch quotes and line items.' 
+      detail: 'Failed to fetch quotes and line items.',
+      originalError: errorMessage
     });
   }
 });
