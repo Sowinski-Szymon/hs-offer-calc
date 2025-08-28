@@ -27,8 +27,7 @@ export default withCORS(async (req, res) => {
     const assocResponse = await hubspotClient.crm.associations.v4.basicApi.getPage(
       'deals',
       dealId,
-      'quotes',
-      {}
+      'quotes'
     );
     const quoteIds = (assocResponse.results || [])
       .map(r => r.toObjectId)
@@ -51,9 +50,8 @@ export default withCORS(async (req, res) => {
       hubspotClient.crm.associations.v4.basicApi.getPage(
         'quotes',
         q.id,
-        'line_items',
-        {}
-      )
+        'line_items'
+        )
     );
     const lineItemAssociationResults = await Promise.all(lineItemAssociationPromises);
 
