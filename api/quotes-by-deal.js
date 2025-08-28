@@ -1,5 +1,5 @@
 // Importy
-import { withCORS } from '../_lib/cors.js';
+import { withCORS } from './_lib/cors.js';
 import hubspot from '@hubspot/api-client';
 
 export default withCORS(async (req, res) => {
