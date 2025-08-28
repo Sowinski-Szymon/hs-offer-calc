@@ -1,5 +1,6 @@
+// /api/quotes-by-deal.js
+
 import { withCORS } from './_lib/cors.js';
-// ZMIANA: Importujemy oficjalnego klienta HubSpot
 import { Client } from '@hubspot/api-client';
 
 export default withCORS(async (req, res) => {
@@ -16,8 +17,11 @@ export default withCORS(async (req, res) => {
         return res.status(500).json({ error: 'Server configuration error.' });
     }
 
-    // ZMIANA: Inicjalizujemy klienta HubSpot
-    const hubspotClient = new Client({ accessToken });
+    // ZMIANA: Dodajemy `basePath`, aby połączyć się z serwerem EU
+    const hubspotClient = new Client({ 
+      accessToken,
+      basePath: 'https://api.hubapi.eu'
+    });
 
     // Krok 1: Pobierz ID Ofert powiązanych z Dealem
     const assocResponse = await hubspotClient.crm.associations.v4.basicApi.getPage('deals', dealId, 'quotes');
