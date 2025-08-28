@@ -19,9 +19,9 @@ export default withCORS(async (req, res) => {
     // Inicjalizacja klienta HubSpot
     console.log(`🚀 Inicjalizacja klienta HubSpot...`);
     const hubspotClient = new hubspot.Client({
-      accessToken,
-      basePath: 'eu1' // zamiast pełnego URL podajemy region
-    });
+  accessToken,
+  basePath: 'https://api.hubapi.com' // zawsze taki, nawet dla EU
+});
 
     // Krok 1: Pobierz ID Quote’ów powiązanych z Dealem
     const assocResponse = await hubspotClient.crm.associations.v4.basicApi.getPage(
