@@ -1,5 +1,6 @@
 import { withCORS } from './_lib/cors.js';
-import { hsFetch } from './_lib/hs.js';
+// ZMIANA: Importujemy oficjalnego klienta HubSpot
+import { Client } from '@hubspot/api-client';
 
 export default withCORS(async (req, res) => {
   try {
@@ -8,51 +9,59 @@ export default withCORS(async (req, res) => {
 
     const { dealId } = req.query;
     if (!dealId) return res.status(400).json({ error: 'dealId required' });
+    
+    const accessToken = process.env.HUBSPOT_PRIVATE_APP_TOKEN;
+    if (!accessToken) {
+        console.error('KRYTYCZNY BŁĄD: Brak HUBSPOT_PRIVATE_APP_TOKEN w zmiennych środowiskowych.');
+        return res.status(500).json({ error: 'Server configuration error.' });
+    }
 
-    // Krok 1: Pobierz ID wszystkich Ofert (Quotes) powiązanych z Dealem
-    const assoc = await hsFetch(`/crm/v4/objects/deals/${dealId}/associations/quotes`);
-    const quoteIds = (assoc?.results || []).map(r => r.to?.id).filter(Boolean);
+    // ZMIANA: Inicjalizujemy klienta HubSpot
+    const hubspotClient = new Client({ accessToken });
+
+    // Krok 1: Pobierz ID Ofert powiązanych z Dealem
+    const assocResponse = await hubspotClient.crm.associations.v4.basicApi.getPage('deals', dealId, 'quotes');
+    const quoteIds = (assocResponse.results || []).map(r => r.toObjectId).filter(Boolean);
 
     if (!quoteIds.length) {
       return res.status(200).json({ quotes: [] });
     }
 
-    // Krok 2: Pobierz szczegóły tych Ofert za pomocą jednego zapytania batch
-    const qProps = ['hs_title', 'hs_status', 'hs_public_url', 'hs_expiration_date', 'hs_total_amount', 'amount'];
-    const qBatch = await hsFetch(`/crm/v3/objects/quotes/batch/read`, {
-      method: 'POST',
-      body: { properties: qProps, inputs: quoteIds.map(id => ({ id })) }
+    // Krok 2: Pobierz szczegóły Ofert
+    const qProps = ['hs_title', 'hs_status', 'hs_public_url', 'hs_expiration_date', 'hs_createdate', 'hs_total_amount', 'amount'];
+    const qBatch = await hubspotClient.crm.quotes.batchApi.read({ 
+        properties: qProps, 
+        inputs: quoteIds.map(id => ({ id })) 
     });
-    const quotesData = qBatch?.results || [];
+    const quotesData = qBatch.results || [];
 
-    // Krok 3: Równolegle pobierz ID wszystkich Pozycji (Line Items) ze wszystkich Ofert
+    // Krok 3: Równolegle pobierz ID Pozycji (Line Items)
     const lineItemAssociationPromises = quotesData.map(q =>
-      hsFetch(`/crm/v4/objects/quotes/${q.id}/associations/line_items`)
+        hubspotClient.crm.associations.v4.basicApi.getPage('quotes', q.id, 'line_items')
     );
     const lineItemAssociationResults = await Promise.all(lineItemAssociationPromises);
 
     const allLineItemIds = new Set();
-    const quoteToLineItemIds = {}; // Mapa do łączenia danych: { quoteId: [liId1, liId2] }
-
+    const quoteToLineItemIds = {};
     lineItemAssociationResults.forEach((assocLi, index) => {
       const quoteId = quotesData[index].id;
-      const liIds = (assocLi?.results || []).map(r => r.to?.id).filter(Boolean);
+      const liIds = (assocLi?.results || []).map(r => r.toObjectId).filter(Boolean);
       quoteToLineItemIds[quoteId] = liIds;
       liIds.forEach(id => allLineItemIds.add(id));
     });
 
-    // Krok 4: Pobierz szczegóły wszystkich unikalnych Pozycji za pomocą jednego zapytania batch
+    // Krok 4: Pobierz szczegóły Pozycji
     let lineItemsById = new Map();
     if (allLineItemIds.size > 0) {
       const liProps = ['name', 'quantity', 'price', 'hs_product_id', 'amount'];
-      const liBatch = await hsFetch(`/crm/v3/objects/line_items/batch/read`, {
-        method: 'POST',
-        body: { properties: liProps, inputs: Array.from(allLineItemIds).map(id => ({ id })) }
+      const liBatch = await hubspotClient.crm.lineItems.batchApi.read({ 
+          properties: liProps, 
+          inputs: Array.from(allLineItemIds).map(id => ({ id })) 
       });
-      (liBatch?.results || []).forEach(item => lineItemsById.set(item.id, item));
+      (liBatch.results || []).forEach(item => lineItemsById.set(item.id, item));
     }
 
-    // Krok 5: Złóż ostateczną odpowiedź, łącząc dane w pamięci
+    // Krok 5: Złóż ostateczną odpowiedź
     const quotes = quotesData.map(r => {
       const relatedLineItemIds = quoteToLineItemIds[r.id] || [];
       const lineItems = relatedLineItemIds.map(liId => {
@@ -82,13 +91,13 @@ export default withCORS(async (req, res) => {
       };
     });
 
-    // Sortuj oferty od najnowszej do najstarszej
     quotes.sort((a, b) => (b.createdAt && a.createdAt) ? (new Date(b.createdAt) - new Date(a.createdAt)) : 0);
 
     return res.status(200).json({ quotes });
 
   } catch (e) {
-    console.error(`--- BŁĄD w /api/quotes-by-deal.js ---`, e.message);
+    const errorMessage = e.body ? JSON.stringify(e.body) : e.message;
+    console.error(`--- BŁĄD w /api/quotes-by-deal.js ---`, errorMessage);
     return res.status(500).json({ 
       error: 'Internal Server Error',
       detail: 'Failed to fetch quotes and line items.' 
