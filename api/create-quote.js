@@ -5,7 +5,84 @@ import { Client } from '@hubspot/api-client';
 const QUOTE_TEMPLATE_ID = '140428159971';
 
 function generateQuoteComment(tier, lineItems) {
-  // ... (bez zmian)
+  const tierMap = {
+    'Tier1': 'Solo',
+    'Tier2': 'Plus',
+    'Tier3': 'Pro',
+    'Tier4': 'Max'
+  };
+  
+  const tierName = tierMap[tier] || tier;
+  const productNames = lineItems.map(li => li.name).filter(Boolean);
+  
+  const hasWPF = productNames.some(p => p.includes('WPF'));
+  const hasBudget = productNames.some(p => p.includes('Budżet'));
+  const hasSWB = productNames.some(p => p.includes('SWB'));
+  const hasUmowy = productNames.some(p => p.includes('Umowy'));
+  
+  const modules = [];
+  if (hasWPF) modules.push('ePublink WPF');
+  if (hasBudget) modules.push('Budżet');
+  if (hasSWB) modules.push('SWB');
+  if (hasUmowy) modules.push('Umowy');
+  
+  const modulesText = modules.length > 0 ? modules.join(', ') : 'wybrane moduły';
+  const extraUsers = lineItems.find(li => li.name && li.name.includes('Dodatkowy użytkownik'));
+  const extraUsersQty = extraUsers ? extraUsers.quantity : 0;
+  
+  let comment = `Wybierając tę ofertę, otrzymują Państwo:\n\n`;
+  comment += `• dostęp do modułów ${modulesText} w ramach planu ${tierName.toUpperCase()} (szczegóły na www.publink.com/cennik)\n\n`;
+  comment += `Wsparcie i wiedza:\n`;
+  
+  if (tier === 'Tier1') {
+    comment += `✅ pomoc techniczna przez chat i mail\n`;
+    comment += `✅ wydłużone wsparcie pomiędzy 1 a 15 listopada do godziny 18:00\n`;
+    comment += `✅ materiały szkoleniowe do samodzielnej nauki\n`;
+    comment += `✅ dostęp do bazy wiedzy\n`;
+    comment += `✅ regularne szkolenia grupowe\n`;
+  } else if (tier === 'Tier2') {
+    comment += `Wszystko co w pakiecie SOLO oraz...\n`;
+    comment += `✅ umawiane konsultacje telefoniczne - dla roli "Skarbnika"\n`;
+    comment += `✅ pomoc przez chat i mail - dla pozostałych użytkowników\n`;
+    comment += `✅ opiekun wdrożenia - indywidualnie dla w uruchomieniu platformy\n`;
+  } else if (tier === 'Tier3') {
+    comment += `Wszystko co w pakiecie PLUS oraz...\n`;
+    comment += `✅ stała infolinia ekspercka - dla roli "Skarbnika"\n`;
+    comment += `✅ umawiane konsultacje telefoniczne - dla wszystkich użytkowników w Urzędzie\n`;
+    comment += `✅ gwarancja spokoju w najbardziej wymagających momentach roku - dyżury obsługi 11 listopada i 31 grudnia\n`;
+  } else if (tier === 'Tier4') {
+    comment += `Wszystko co w pakiecie PRO oraz...\n`;
+    comment += `✅ dedykowany opiekun klienta\n`;
+    comment += `✅ konsultacje telefoniczne dla wszystkich użytkowników\n`;
+    comment += `✅ gwarancja spokoju przez cały rok - dyżury obsługi przez wszystkie dni wolne\n`;
+    comment += `✅ priorytetowe wsparcie\n`;
+  }
+  
+  comment += `\n`;
+  comment += `Wliczeni użytkownicy:\n`;
+  
+  if (tier === 'Tier1') {
+    comment += `✅ 1 użytkownik\n`;
+    comment += `📌 każdy kolejny użytkownik 590 zł rocznie (netto)`;
+    if (extraUsersQty > 0) comment += ` - w ofercie: ${extraUsersQty} dodatkowych użytkowników`;
+    comment += `\n`;
+  } else if (tier === 'Tier2') {
+    comment += `✅ do 10 użytkowników w urzędzie\n`;
+    comment += `✅ do 10 użytkowników w JO\n`;
+    comment += `📌 każdy kolejny użytkownik 690 zł rocznie (netto)`;
+    if (extraUsersQty > 0) comment += ` - w ofercie: ${extraUsersQty} dodatkowych użytkowników`;
+    comment += `\n`;
+  } else if (tier === 'Tier3') {
+    comment += `✅ do 30 użytkowników w urzędzie\n`;
+    comment += `✅ do 30 użytkowników w JO\n`;
+    comment += `📌 każdy kolejny użytkownik 890 zł rocznie (netto)`;
+    if (extraUsersQty > 0) comment += ` - w ofercie: ${extraUsersQty} dodatkowych użytkowników`;
+    comment += `\n`;
+  } else if (tier === 'Tier4') {
+    comment += `✅ nieograniczona liczba użytkowników w urzędzie i JO\n`;
+  }
+  
+  return comment;
 }
 
 async function handler(req, res) {
@@ -85,19 +162,29 @@ async function handler(req, res) {
       [{ associationCategory: 'HUBSPOT_DEFINED', associationTypeId: 64 }]
     );
     
-    // 2. QUOTE TEMPLATE - używamy PUT endpoint według dokumentacji strona 2-3
-    console.log('Adding template association using PUT...');
-    const axios = require('axios');
-    await axios.put(
+    // 2. QUOTE TEMPLATE - używamy PUT endpoint z fetch
+    console.log('Adding template association using fetch...');
+    const templateResponse = await fetch(
       `https://api.hubapi.com/crm/v4/objects/quote/${quote.id}/associations/quote_template/${QUOTE_TEMPLATE_ID}`,
-      [{ associationCategory: 'HUBSPOT_DEFINED', associationTypeId: 286 }],
       {
+        method: 'PUT',
         headers: {
           'Authorization': `Bearer ${accessToken}`,
           'Content-Type': 'application/json'
-        }
+        },
+        body: JSON.stringify([
+          { associationCategory: 'HUBSPOT_DEFINED', associationTypeId: 286 }
+        ])
       }
     );
+    
+    if (!templateResponse.ok) {
+      const errorText = await templateResponse.text();
+      console.error('Template association failed:', errorText);
+      throw new Error(`Template association failed: ${errorText}`);
+    }
+    
+    console.log('✅ Template association added');
     
     // 3. Line items
     for (const lineItem of createdLineItems) {
@@ -107,13 +194,13 @@ async function handler(req, res) {
       );
     }
     
-    // 4. Company (optional)
+    // 4. Company (optional) - POPRAWIONY ID NA 71
     if (companyIds.length > 0) {
       for (const companyId of companyIds) {
         try {
           await hubspotClient.crm.associations.v4.basicApi.create(
             'quote', quote.id, 'company', companyId,
-            [{ associationCategory: 'HUBSPOT_DEFINED', associationTypeId: 70 }]
+            [{ associationCategory: 'HUBSPOT_DEFINED', associationTypeId: 71 }]
           );
         } catch (err) {
           console.warn(`Could not associate company ${companyId}`);
