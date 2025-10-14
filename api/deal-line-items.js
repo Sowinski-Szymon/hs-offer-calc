@@ -19,20 +19,21 @@ async function handler(req, res) {
     const hubspotClient = new Client({ accessToken });
     
     try {
-      // Pobierz line items powiązane z dealem przez associations
-      const associations = await hubspotClient.crm.deals.associationsApi.getAll(
+      // Pobierz line items powiązane z dealem przez associations v4
+      const associations = await hubspotClient.crm.associations.v4.basicApi.getPage(
+        'deal',
         dealId,
-        'line_items'
+        'line_item'
       );
       
-      console.log('Associations result:', JSON.stringify(associations, null, 2));
+      console.log('Associations v4 result:', JSON.stringify(associations, null, 2));
       
       if (!associations.results || associations.results.length === 0) {
         console.log('Brak line items dla deala:', dealId);
         return res.status(200).json({ lineItems: [] });
       }
       
-      const lineItemIds = associations.results.map(assoc => assoc.id);
+      const lineItemIds = associations.results.map(assoc => assoc.toObjectId);
       console.log('Line item IDs:', lineItemIds);
       
       // Pobierz szczegóły każdego line item
@@ -61,7 +62,7 @@ async function handler(req, res) {
         price: li.properties.price || '0',
         discount: li.properties.discount || '0',
         amount: li.properties.amount || '0',
-        rodzaj_arr: li.properties.rodzaj_arr || ''
+        rodzaj_arr: li.properties.rodzaj_arr || 'nb'
       }));
       
       console.log('Returning line items:', JSON.stringify(lineItems, null, 2));
