@@ -63,16 +63,16 @@ async function handler(req, res) {
       }, 0);
       
       // Krok 3: Utwórz quote
-      const quoteProperties = {
-        hs_title: quoteName || `Quote - ${new Date().toISOString().slice(0, 10)}`,
-        hs_expiration_date: expirationDate || new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).getTime(),
-        hs_status: 'DRAFT',
-        amount: String(totalAmount)
-      };
-      
-      const quote = await hubspotClient.crm.quotes.basicApi.create({
-        properties: quoteProperties
-      });
+const quoteProperties = {
+  hs_title: quoteName || `Quote - ${new Date().toISOString().slice(0, 10)}`,
+  hs_expiration_date: expirationDate || new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).getTime(),
+  hs_status: 'DRAFT'
+  // Nie ustawiamy tutaj kwoty. HubSpot obliczy ją sam na podstawie powiązanych line items.
+};
+
+const quote = await hubspotClient.crm.quotes.basicApi.create({
+  properties: quoteProperties
+});
       
       console.log(`Created quote: ${quote.id}`);
       
