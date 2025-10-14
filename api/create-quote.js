@@ -168,28 +168,26 @@ async function handler(req, res) {
       // Krok 4: Generuj komentarz
       const quoteComment = generateQuoteComment(tier, lineItems);
       
-      // Krok 5: Przygotuj properties (BEZ hubspot_owner_id!)
+      // Krok 5: Przygotuj properties (BEZ hs_quote_template - template idzie w associations!)
       const quoteProperties = {
         hs_title: quoteName || `Oferta - ${new Date().toISOString().slice(0, 10)}`,
         hs_expiration_date: expirationDate || new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).getTime(),
         hs_status: 'DRAFT',
-        hs_language: 'pl',
-        hs_quote_template: QUOTE_TEMPLATE_ID
+        hs_language: 'pl'
       };
       
       console.log('Quote properties:', quoteProperties);
-      console.log('NOTE: Owner will be inherited from deal automatically');
       
       // Krok 6: Przygotuj associations
       const associations = [];
       
-      // REQUIRED: Deal
+      // REQUIRED: Deal (MUSI być PIERWSZY!)
       associations.push({
         to: { id: dealId },
         types: [{ associationCategory: 'HUBSPOT_DEFINED', associationTypeId: 64 }]
       });
       
-      // REQUIRED: Quote Template
+      // REQUIRED: Quote Template (MUSI być DRUGI!)
       associations.push({
         to: { id: QUOTE_TEMPLATE_ID },
         types: [{ associationCategory: 'HUBSPOT_DEFINED', associationTypeId: 286 }]
