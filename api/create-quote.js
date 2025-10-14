@@ -105,11 +105,7 @@ async function handler(req, res) {
     const hubspotClient = new Client({ accessToken });
     
     try {
-      console.log('Creating quote for deal:', dealId);
-      console.log('Using quote template:', QUOTE_TEMPLATE_ID);
-      console.log('Tier:', tier);
-      
-      // Krok 1: Pobierz deal i jego associations
+      console.log('=== KROK 1: Pobieranie danych deala ===');
       const deal = await hubspotClient.crm.deals.basicApi.getById(
         dealId,
         ['dealname', 'amount', 'hubspot_owner_id']
@@ -128,36 +124,26 @@ async function handler(req, res) {
       console.log('Company IDs:', companyIds);
       console.log('Contact IDs:', contactIds);
       
-      if (companyIds.length === 0) console.warn('WARNING: No company associated with deal');
-      if (contactIds.length === 0) console.warn('WARNING: No contact associated with deal');
-      
-      // Krok 2: Utwórz line items
+      console.log('=== KROK 2: Tworzenie line items ===');
       const createdLineItems = [];
       
       for (const item of lineItems) {
-        try {
-          const properties = {
-            hs_product_id: String(item.productId),
-            quantity: String(item.quantity || 1),
-            price: String(item.price || 0),
-            discount: String(item.discount || 0)
-          };
-          
-          if (item.rodzaj_arr) {
-            properties.rodzaj_arr = String(item.rodzaj_arr);
-          }
-          
-          const createdLineItem = await hubspotClient.crm.lineItems.basicApi.create({ properties });
-          console.log(`Created line item: ${createdLineItem.id}`);
-          createdLineItems.push(createdLineItem);
-          
-        } catch (createError) {
-          console.error(`Błąd tworzenia line item:`, createError.message);
-          throw createError;
+        const properties = {
+          hs_product_id: String(item.productId),
+          quantity: String(item.quantity || 1),
+          price: String(item.price || 0),
+          discount: String(item.discount || 0)
+        };
+        
+        if (item.rodzaj_arr) {
+          properties.rodzaj_arr = String(item.rodzaj_arr);
         }
+        
+        const createdLineItem = await hubspotClient.crm.lineItems.basicApi.create({ properties });
+        console.log(`Created line item: ${createdLineItem.id}`);
+        createdLineItems.push(createdLineItem);
       }
       
-      // Krok 3: Oblicz kwotę
       const totalAmount = createdLineItems.reduce((sum, li) => {
         const qty = Number(li.properties.quantity || 1);
         const price = Number(li.properties.price || 0);
@@ -165,10 +151,9 @@ async function handler(req, res) {
         return sum + (qty * price - discount);
       }, 0);
       
-      // Krok 4: Generuj komentarz
       const quoteComment = generateQuoteComment(tier, lineItems);
       
-      // Krok 5: Przygotuj properties (BEZ hs_quote_template - template idzie w associations!)
+      console.log('=== KROK 3: Tworzenie quote (bez associations) ===');
       const quoteProperties = {
         hs_title: quoteName || `Oferta - ${new Date().toISOString().slice(0, 10)}`,
         hs_expiration_date: expirationDate || new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).getTime(),
@@ -176,59 +161,85 @@ async function handler(req, res) {
         hs_language: 'pl'
       };
       
-      console.log('Quote properties:', quoteProperties);
-      
-      // Krok 6: Przygotuj associations
-      const associations = [];
-      
-      // REQUIRED: Deal (MUSI być PIERWSZY!)
-      associations.push({
-        to: { id: dealId },
-        types: [{ associationCategory: 'HUBSPOT_DEFINED', associationTypeId: 64 }]
-      });
-      
-      // REQUIRED: Quote Template (MUSI być DRUGI!)
-      associations.push({
-        to: { id: QUOTE_TEMPLATE_ID },
-        types: [{ associationCategory: 'HUBSPOT_DEFINED', associationTypeId: 286 }]
-      });
-      
-      // REQUIRED: Line Items
-      createdLineItems.forEach(lineItem => {
-        associations.push({
-          to: { id: lineItem.id },
-          types: [{ associationCategory: 'HUBSPOT_DEFINED', associationTypeId: 67 }]
-        });
-      });
-      
-      // Optional: Company
-      companyIds.forEach(companyId => {
-        associations.push({
-          to: { id: companyId },
-          types: [{ associationCategory: 'HUBSPOT_DEFINED', associationTypeId: 70 }]
-        });
-      });
-      
-      // Optional: Contacts
-      contactIds.forEach(contactId => {
-        associations.push({
-          to: { id: contactId },
-          types: [{ associationCategory: 'HUBSPOT_DEFINED', associationTypeId: 69 }]
-        });
-      });
-      
-      console.log('Creating quote with', associations.length, 'associations');
-      
-      // Krok 7: Utwórz quote z associations
       const quote = await hubspotClient.crm.quotes.basicApi.create({
-        properties: quoteProperties,
-        associations: associations
+        properties: quoteProperties
       });
       
       console.log(`✅ Created quote: ${quote.id}`);
-      console.log(`✅ Owner inherited from deal: ${deal.properties.hubspot_owner_id}`);
       
-      // Krok 8: Dodaj komentarz jako note
+      console.log('=== KROK 4: Dodawanie associations ===');
+      
+      // Association z dealem (REQUIRED)
+      console.log('Adding deal association...');
+      await hubspotClient.crm.associations.v4.basicApi.create(
+        'quote',
+        quote.id,
+        'deal',
+        dealId,
+        [{ associationCategory: 'HUBSPOT_DEFINED', associationTypeId: 64 }]
+      );
+      
+      // Association z template (REQUIRED)
+      console.log('Adding template association...');
+      await hubspotClient.crm.associations.v4.basicApi.create(
+        'quote',
+        quote.id,
+        'quote_template',
+        QUOTE_TEMPLATE_ID,
+        [{ associationCategory: 'HUBSPOT_DEFINED', associationTypeId: 286 }]
+      );
+      
+      // Associations z line items (REQUIRED)
+      console.log('Adding line items associations...');
+      for (const lineItem of createdLineItems) {
+        await hubspotClient.crm.associations.v4.basicApi.create(
+          'quote',
+          quote.id,
+          'line_item',
+          lineItem.id,
+          [{ associationCategory: 'HUBSPOT_DEFINED', associationTypeId: 67 }]
+        );
+      }
+      
+      // Associations z company (optional)
+      if (companyIds.length > 0) {
+        console.log('Adding company associations...');
+        for (const companyId of companyIds) {
+          try {
+            await hubspotClient.crm.associations.v4.basicApi.create(
+              'quote',
+              quote.id,
+              'company',
+              companyId,
+              [{ associationCategory: 'HUBSPOT_DEFINED', associationTypeId: 70 }]
+            );
+          } catch (err) {
+            console.warn(`Could not associate company ${companyId}:`, err.message);
+          }
+        }
+      }
+      
+      // Associations z contacts (optional)
+      if (contactIds.length > 0) {
+        console.log('Adding contact associations...');
+        for (const contactId of contactIds) {
+          try {
+            await hubspotClient.crm.associations.v4.basicApi.create(
+              'quote',
+              quote.id,
+              'contact',
+              contactId,
+              [{ associationCategory: 'HUBSPOT_DEFINED', associationTypeId: 69 }]
+            );
+          } catch (err) {
+            console.warn(`Could not associate contact ${contactId}:`, err.message);
+          }
+        }
+      }
+      
+      console.log('✅ All associations added');
+      
+      console.log('=== KROK 5: Dodawanie komentarza ===');
       try {
         const note = await hubspotClient.crm.objects.notes.basicApi.create({
           properties: {
@@ -247,10 +258,12 @@ async function handler(req, res) {
           ]
         });
         
-        console.log(`✅ Added note ${note.id} to quote and deal`);
+        console.log(`✅ Added note ${note.id}`);
       } catch (noteError) {
-        console.warn('⚠️ Nie udało się dodać notatki:', noteError.message);
+        console.warn('⚠️ Could not add note:', noteError.message);
       }
+      
+      console.log('=== QUOTE CREATED SUCCESSFULLY ===');
       
       return res.status(200).json({ 
         success: true,
