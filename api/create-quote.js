@@ -66,8 +66,15 @@ async function handler(req, res) {
 const quoteProperties = {
   hs_title: quoteName || `Quote - ${new Date().toISOString().slice(0, 10)}`,
   hs_expiration_date: expirationDate || new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).getTime(),
-  hs_status: 'DRAFT'
-  // Nie ustawiamy tutaj kwoty. HubSpot obliczy ją sam na podstawie powiązanych line items.
+  hs_status: 'DRAFT',
+  
+  // --- POPRAWKA: Dodaj wymaganą właściwość języka ---
+  hs_language: 'pl', // Możesz tu wstawić 'en', 'de' itd., w zależności od potrzeb
+
+  // Poniższe pola z poprzedniej konwersacji (opcjonalne)
+  hs_comments_to_customer: customerComment || '',
+  hs_internal_comments: internalComment,
+  hubspot_owner_id: ownerId || null
 };
 
 const quote = await hubspotClient.crm.quotes.basicApi.create({
