@@ -20,64 +20,94 @@ async function handler(req, res) {
 
     const hubspotClient = new Client({ accessToken });
     
-    // Krok 1: Pobierz istniejące line items dla deala
-    const associations = await hubspotClient.crm.deals.associationsApi.getAll(
-      dealId,
-      'line_items'
-    );
-    
-    const existingLineItemIds = associations.results?.map(r => r.id) || [];
-    
-    // Krok 2: Usuń wszystkie istniejące line items
-    for (const lineItemId of existingLineItemIds) {
-      try {
-        await hubspotClient.crm.lineItems.basicApi.archive(lineItemId);
-      } catch (archiveError) {
-        console.warn(`Nie udało się usunąć line item ${lineItemId}:`, archiveError.message);
+    try {
+      // Krok 1: Pobierz istniejące line items dla deala (API v4)
+      const associations = await hubspotClient.crm.associations.v4.basicApi.getPage(
+        'deal',
+        dealId,
+        'line_item'
+      );
+      
+      const existingLineItemIds = associations.results?.map(r => r.toObjectId) || [];
+      console.log('Existing line items to delete:', existingLineItemIds);
+      
+      // Krok 2: Usuń wszystkie istniejące line items
+      for (const lineItemId of existingLineItemIds) {
+        try {
+          await hubspotClient.crm.lineItems.basicApi.archive(lineItemId);
+          console.log(`Deleted line item: ${lineItemId}`);
+        } catch (archiveError) {
+          console.warn(`Nie udało się usunąć line item ${lineItemId}:`, archiveError.message);
+        }
       }
-    }
-    
-    // Krok 3: Utwórz nowe line items
-    const createdLineItems = [];
-    
-    for (const item of lineItems) {
-      try {
-        const lineItemData = {
-          properties: {
+      
+      // Krok 3: Utwórz nowe line items
+      const createdLineItems = [];
+      
+      for (const item of lineItems) {
+        try {
+          console.log('Creating line item:', item);
+          
+          // Przygotuj properties
+          const properties = {
             hs_product_id: String(item.productId),
             quantity: String(item.quantity || 1),
             price: String(item.price || 0),
-            discount: String(item.discount || 0),
-            rodzaj_arr: String(item.rodzaj_arr || '')
-          },
-          associations: [
-            {
-              to: { id: dealId },
-              types: [
-                {
-                  associationCategory: 'HUBSPOT_DEFINED',
-                  associationTypeId: 20 // Deal to Line Item
-                }
-              ]
-            }
-          ]
-        };
-        
-        const createdLineItem = await hubspotClient.crm.lineItems.basicApi.create(lineItemData);
-        createdLineItems.push({
-          id: createdLineItem.id,
-          productId: createdLineItem.properties.hs_product_id
-        });
-      } catch (createError) {
-        console.error(`Błąd tworzenia line item dla produktu ${item.productId}:`, createError.message);
+            discount: String(item.discount || 0)
+          };
+          
+          // Dodaj rodzaj_arr tylko jeśli istnieje
+          if (item.rodzaj_arr) {
+            properties.rodzaj_arr = String(item.rodzaj_arr);
+          }
+          
+          // Utwórz line item
+          const createdLineItem = await hubspotClient.crm.lineItems.basicApi.create({
+            properties
+          });
+          
+          console.log(`Created line item: ${createdLineItem.id}`);
+          
+          // Krok 4: Utwórz association z dealem (API v4)
+          await hubspotClient.crm.associations.v4.basicApi.create(
+            'line_item',
+            createdLineItem.id,
+            'deal',
+            dealId,
+            [
+              {
+                associationCategory: 'HUBSPOT_DEFINED',
+                associationTypeId: 20 // Line Item to Deal
+              }
+            ]
+          );
+          
+          console.log(`Associated line item ${createdLineItem.id} with deal ${dealId}`);
+          
+          createdLineItems.push({
+            id: createdLineItem.id,
+            productId: createdLineItem.properties.hs_product_id
+          });
+        } catch (createError) {
+          console.error(`Błąd tworzenia line item dla produktu ${item.productId}:`, createError.message);
+          console.error('Error details:', createError.body || createError);
+        }
       }
-    }
 
-    return res.status(200).json({ 
-      success: true,
-      created: createdLineItems.length,
-      lineItems: createdLineItems
-    });
+      return res.status(200).json({ 
+        success: true,
+        created: createdLineItems.length,
+        lineItems: createdLineItems
+      });
+      
+    } catch (apiError) {
+      console.error('HubSpot API error details:', {
+        message: apiError.message,
+        body: apiError.body,
+        statusCode: apiError.statusCode
+      });
+      throw apiError;
+    }
     
   } catch (e) {
     const errorMessage = e.body ? JSON.stringify(e.body) : e.message;
