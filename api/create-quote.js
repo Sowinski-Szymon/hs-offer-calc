@@ -7,7 +7,7 @@ async function handler(req, res) {
     if (req.method === 'OPTIONS') return res.status(204).end();
     if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
 
-    const { dealId, lineItems, quoteName, expirationDate } = req.body;
+    const { dealId, lineItems, quoteName, expirationDate, dealOwnerId } = req.body;
     const accessToken = process.env.HUBSPOT_PRIVATE_APP_TOKEN;
     
     if (!dealId || !lineItems || !lineItems.length) {
@@ -22,6 +22,7 @@ async function handler(req, res) {
     
     try {
       console.log('Creating quote for deal:', dealId);
+      console.log('Deal owner ID:', dealOwnerId);
       
       // Krok 1: Utwórz tymczasowe line items dla quote
       const createdLineItems = [];
@@ -62,28 +63,59 @@ async function handler(req, res) {
         return sum + (qty * price - discount);
       }, 0);
       
-      // Krok 3: Utwórz quote
-const quoteProperties = {
-  hs_title: quoteName || `Quote - ${new Date().toISOString().slice(0, 10)}`,
-  hs_expiration_date: expirationDate || new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).getTime(),
-  hs_status: 'DRAFT',
-  
-  // --- POPRAWKA: Dodaj wymaganą właściwość języka ---
-  hs_language: 'pl', // Możesz tu wstawić 'en', 'de' itd., w zależności od potrzeb
-
-  // Poniższe pola z poprzedniej konwersacji (opcjonalne)
-  hs_comments_to_customer: customerComment || '',
-  hs_internal_comments: internalComment,
-  hubspot_owner_id: ownerId || null
-};
-
-const quote = await hubspotClient.crm.quotes.basicApi.create({
-  properties: quoteProperties
-});
+      // Krok 3: Określ tier i produkty dla komentarza
+      const tierMap = {
+        'Tier1': 'Solo',
+        'Tier2': 'Plus',
+        'Tier3': 'Pro',
+        'Tier4': 'Max'
+      };
+      
+      // Wyciągnij nazwy produktów z line items
+      const productNames = lineItems.map(li => li.name).filter(Boolean);
+      const uniqueProducts = [...new Set(productNames)];
+      
+      // Próbuj określić tier z nazw produktów lub cen
+      let detectedTier = 'Standard';
+      // Tu możesz dodać logikę wykrywania tiera na podstawie cen
+      // Na razie użyjemy informacji z produktów
+      
+      // Generuj komentarz dynamiczny
+      const customerComment = `Oferta zawiera: ${uniqueProducts.join(', ')}. Tier: ${detectedTier}.`;
+      const internalComment = `Quote wygenerowany automatycznie przez kalkulator. Produkty: ${uniqueProducts.length}. Kwota: ${totalAmount.toFixed(2)} PLN.`;
+      
+      console.log('Generated comments:', { customerComment, internalComment });
+      
+      // Krok 4: Utwórz quote
+      const quoteProperties = {
+        hs_title: quoteName || `Quote - ${new Date().toISOString().slice(0, 10)}`,
+        hs_expiration_date: expirationDate || new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).getTime(),
+        hs_status: 'DRAFT',
+        hs_language: 'pl'
+      };
+      
+      // Dodaj owner tylko jeśli jest dostępny
+      if (dealOwnerId) {
+        quoteProperties.hubspot_owner_id = String(dealOwnerId);
+      }
+      
+      // Dodaj komentarze jeśli są dostępne
+      if (customerComment) {
+        quoteProperties.hs_comments_to_customer = customerComment;
+      }
+      if (internalComment) {
+        quoteProperties.hs_internal_comments = internalComment;
+      }
+      
+      console.log('Quote properties:', quoteProperties);
+      
+      const quote = await hubspotClient.crm.quotes.basicApi.create({
+        properties: quoteProperties
+      });
       
       console.log(`Created quote: ${quote.id}`);
       
-      // Krok 4: Powiąż quote z dealem
+      // Krok 5: Powiąż quote z dealem
       await hubspotClient.crm.associations.v4.basicApi.create(
         'quote',
         quote.id,
@@ -99,7 +131,7 @@ const quote = await hubspotClient.crm.quotes.basicApi.create({
       
       console.log(`Associated quote ${quote.id} with deal ${dealId}`);
       
-      // Krok 5: Powiąż line items z quote
+      // Krok 6: Powiąż line items z quote
       for (const lineItem of createdLineItems) {
         await hubspotClient.crm.associations.v4.basicApi.create(
           'line_item',
@@ -122,7 +154,7 @@ const quote = await hubspotClient.crm.quotes.basicApi.create({
           id: quote.id,
           name: quote.properties.hs_title,
           status: quote.properties.hs_status,
-          amount: quote.properties.amount
+          amount: totalAmount
         }
       });
       
