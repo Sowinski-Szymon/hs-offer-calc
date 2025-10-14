@@ -2,8 +2,10 @@
 import { withCORS } from './_lib/cors.js';
 import { Client } from '@hubspot/api-client';
 
+// STAŁY TEMPLATE ID
+const QUOTE_TEMPLATE_ID = '140428159971';
+
 function generateQuoteComment(tier, lineItems) {
-  // ... (pozostaje bez zmian)
   const tierMap = {
     'Tier1': 'Solo',
     'Tier2': 'Plus',
@@ -104,28 +106,10 @@ async function handler(req, res) {
     
     try {
       console.log('Creating quote for deal:', dealId);
+      console.log('Using quote template:', QUOTE_TEMPLATE_ID);
       console.log('Tier:', tier);
       
-      // Krok 1: Pobierz quote templates
-      let defaultTemplateId = null;
-      try {
-        const templates = await hubspotClient.apiRequest({
-          method: 'GET',
-          path: '/crm/v3/objects/quote_template'
-        });
-        
-        if (templates.results && templates.results.length > 0) {
-          defaultTemplateId = templates.results[0].id;
-          console.log('Found default quote template:', defaultTemplateId);
-        } else {
-          throw new Error('No quote templates found. Please create a quote template in HubSpot first.');
-        }
-      } catch (templateError) {
-        console.error('Could not fetch quote templates:', templateError.message);
-        throw new Error('Quote template is required but none found');
-      }
-      
-      // Krok 2: Pobierz deal i jego associations
+      // Krok 1: Pobierz deal i jego associations
       const deal = await hubspotClient.crm.deals.basicApi.getById(
         dealId,
         ['dealname', 'amount', 'hubspot_owner_id']
@@ -147,7 +131,7 @@ async function handler(req, res) {
       if (companyIds.length === 0) console.warn('WARNING: No company associated with deal');
       if (contactIds.length === 0) console.warn('WARNING: No contact associated with deal');
       
-      // Krok 3: Utwórz line items
+      // Krok 2: Utwórz line items
       const createdLineItems = [];
       
       for (const item of lineItems) {
@@ -173,7 +157,7 @@ async function handler(req, res) {
         }
       }
       
-      // Krok 4: Oblicz kwotę
+      // Krok 3: Oblicz kwotę
       const totalAmount = createdLineItems.reduce((sum, li) => {
         const qty = Number(li.properties.quantity || 1);
         const price = Number(li.properties.price || 0);
@@ -181,22 +165,22 @@ async function handler(req, res) {
         return sum + (qty * price - discount);
       }, 0);
       
-      // Krok 5: Generuj komentarz
+      // Krok 4: Generuj komentarz
       const quoteComment = generateQuoteComment(tier, lineItems);
       
-      // Krok 6: Przygotuj properties (BEZ hubspot_owner_id!)
+      // Krok 5: Przygotuj properties (BEZ hubspot_owner_id!)
       const quoteProperties = {
         hs_title: quoteName || `Oferta - ${new Date().toISOString().slice(0, 10)}`,
         hs_expiration_date: expirationDate || new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).getTime(),
         hs_status: 'DRAFT',
         hs_language: 'pl',
-        hs_quote_template: String(defaultTemplateId)
+        hs_quote_template: QUOTE_TEMPLATE_ID
       };
       
       console.log('Quote properties:', quoteProperties);
       console.log('NOTE: Owner will be inherited from deal automatically');
       
-      // Krok 7: Przygotuj associations
+      // Krok 6: Przygotuj associations
       const associations = [];
       
       // REQUIRED: Deal
@@ -207,7 +191,7 @@ async function handler(req, res) {
       
       // REQUIRED: Quote Template
       associations.push({
-        to: { id: defaultTemplateId },
+        to: { id: QUOTE_TEMPLATE_ID },
         types: [{ associationCategory: 'HUBSPOT_DEFINED', associationTypeId: 286 }]
       });
       
@@ -237,16 +221,16 @@ async function handler(req, res) {
       
       console.log('Creating quote with', associations.length, 'associations');
       
-      // Krok 8: Utwórz quote z associations
+      // Krok 7: Utwórz quote z associations
       const quote = await hubspotClient.crm.quotes.basicApi.create({
         properties: quoteProperties,
         associations: associations
       });
       
-      console.log(`Created quote: ${quote.id}`);
-      console.log(`Owner should be inherited from deal: ${deal.properties.hubspot_owner_id}`);
+      console.log(`✅ Created quote: ${quote.id}`);
+      console.log(`✅ Owner inherited from deal: ${deal.properties.hubspot_owner_id}`);
       
-      // Krok 9: Dodaj komentarz jako note
+      // Krok 8: Dodaj komentarz jako note
       try {
         const note = await hubspotClient.crm.objects.notes.basicApi.create({
           properties: {
@@ -265,9 +249,9 @@ async function handler(req, res) {
           ]
         });
         
-        console.log(`Added note ${note.id} to quote and deal`);
+        console.log(`✅ Added note ${note.id} to quote and deal`);
       } catch (noteError) {
-        console.warn('Nie udało się dodać notatki:', noteError.message);
+        console.warn('⚠️ Nie udało się dodać notatki:', noteError.message);
       }
       
       return res.status(200).json({ 
