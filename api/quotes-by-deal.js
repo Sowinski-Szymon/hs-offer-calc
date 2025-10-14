@@ -39,7 +39,7 @@ async function handler(req, res) {
         try {
           console.log('Pobieranie quote:', quoteId);
           
-          // Pobierz quote z wszystkimi potrzebnymi properties
+          // Pobierz quote z WSZYSTKIMI properties aby zobaczyć co jest dostępne
           const quote = await hubspotClient.crm.quotes.basicApi.getById(
             quoteId,
             [
@@ -48,16 +48,14 @@ async function handler(req, res) {
               'hs_expiration_date',
               'hs_createdate',
               'amount',
-              'hs_public_url_key'
+              'hs_public_url_key',
+              'hs_quote_link',
+              'hs_public_url',
+              'hs_esign_url'
             ]
           );
           
-          console.log('Quote properties:', {
-            id: quote.id,
-            title: quote.properties.hs_title,
-            status: quote.properties.hs_status,
-            amount: quote.properties.amount
-          });
+          console.log('Quote properties:', quote.properties);
           
           // Pobierz line items dla quote (API v4)
           let lineItemAssociations;
@@ -126,6 +124,30 @@ async function handler(req, res) {
           
           const status = statusMap[quote.properties.hs_status] || quote.properties.hs_status || 'DRAFT';
           
+          // Próbuj różne properties dla publicznego URL
+          let publicUrl = null;
+          
+          // Próba 1: hs_esign_url (często używane dla publicznego linku)
+          if (quote.properties.hs_esign_url) {
+            publicUrl = quote.properties.hs_esign_url;
+          }
+          // Próba 2: hs_public_url
+          else if (quote.properties.hs_public_url) {
+            publicUrl = quote.properties.hs_public_url;
+          }
+          // Próba 3: hs_quote_link
+          else if (quote.properties.hs_quote_link) {
+            publicUrl = quote.properties.hs_quote_link;
+          }
+          
+          console.log(`Quote ${quoteId} - dostępne URL properties:`, {
+            hs_esign_url: quote.properties.hs_esign_url || null,
+            hs_public_url: quote.properties.hs_public_url || null,
+            hs_quote_link: quote.properties.hs_quote_link || null,
+            hs_public_url_key: quote.properties.hs_public_url_key || null,
+            finalPublicUrl: publicUrl
+          });
+          
           return {
             id: quote.id,
             name: quote.properties.hs_title || `Quote ${quote.id}`,
@@ -133,9 +155,7 @@ async function handler(req, res) {
             amount: finalAmount,
             expirationDate: quote.properties.hs_expiration_date || null,
             createdAt: quote.properties.hs_createdate || null,
-            publicUrl: quote.properties.hs_public_url_key 
-              ? `https://app.hubspot.com/quotes/${quote.properties.hs_public_url_key}` 
-              : null,
+            publicUrl: publicUrl,
             lineItems
           };
         } catch (error) {
