@@ -27,7 +27,7 @@ async function handler(req, res) {
         ]
       }],
       sorts: [{ propertyName: 'hs_lastmodifieddate', direction: 'DESCENDING' }],
-      properties: ['dealname', 'pipeline', 'hubspot_owner_id', 'closedate', 'subscription_tier'], // DODANE!
+      properties: ['dealname', 'pipeline', 'hubspot_owner_id', 'closedate', 'subscription_tier', 'dealstage'],
       limit: 1
     });
     
@@ -62,7 +62,8 @@ async function handler(req, res) {
         owner: ownerDetails,
         properties: {
           closedate: foundDeal.properties.closedate || null,
-          subscription_tier: foundDeal.properties.subscription_tier || null
+          subscription_tier: foundDeal.properties.subscription_tier || null,
+          dealstage: foundDeal.properties.dealstage || null
         }
       }
     });
