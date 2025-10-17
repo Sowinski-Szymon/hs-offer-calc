@@ -1,5 +1,4 @@
 // /api/deal-by-company.js
-
 import { withCORS } from './_lib/cors.js';
 import { Client } from '@hubspot/api-client';
 
@@ -7,10 +6,9 @@ async function handler(req, res) {
   try {
     const { companyId } = req.query;
     
-    // ZMIANA: Ujednolicenie nazwy tokena na tę samą, co w hs.js
     const accessToken = process.env.HUBSPOT_PRIVATE_APP_TOKEN;
     const pipelineId = process.env.PIPELINE_ID;
-
+    
     if (!companyId) {
       return res.status(400).json({ error: 'Query parameter "companyId" is required.' });
     }
@@ -18,9 +16,9 @@ async function handler(req, res) {
       console.error('Błąd konfiguracji serwera: Brak HUBSPOT_PRIVATE_APP_TOKEN lub PIPELINE_ID.');
       return res.status(500).json({ error: 'Server configuration error.' });
     }
-
+    
     const hubspotClient = new Client({ accessToken });
-
+    
     const searchResult = await hubspotClient.crm.deals.searchApi.doSearch({
       filterGroups: [{
         filters: [
@@ -29,16 +27,15 @@ async function handler(req, res) {
         ]
       }],
       sorts: [{ propertyName: 'hs_lastmodifieddate', direction: 'DESCENDING' }],
-      properties: ['dealname', 'pipeline', 'hubspot_owner_id'],
+      properties: ['dealname', 'pipeline', 'hubspot_owner_id', 'closedate', 'subscription_tier'], // DODANE!
       limit: 1
     });
-
+    
     const foundDeal = searchResult.results?.[0];
-
     if (!foundDeal) {
       return res.status(200).json({ deal: null });
     }
-
+    
     let ownerDetails = null;
     const ownerId = foundDeal.properties.hubspot_owner_id;
     if (ownerId) {
@@ -56,16 +53,19 @@ async function handler(req, res) {
         ownerDetails = { id: ownerId, name: 'Dane właściciela niedostępne', email: null };
       }
     }
-
+    
     return res.status(200).json({
       deal: {
         id: foundDeal.id,
         name: foundDeal.properties.dealname || '',
         pipelineId: foundDeal.properties.pipeline || null,
-        owner: ownerDetails
+        owner: ownerDetails,
+        properties: {
+          closedate: foundDeal.properties.closedate || null,
+          subscription_tier: foundDeal.properties.subscription_tier || null
+        }
       }
     });
-
   } catch (e) {
     const errorMessage = e.body ? JSON.stringify(e.body) : e.message;
     console.error('--- KRYTYCZNY BŁĄD w handlerze deal-by-company ---', errorMessage);
