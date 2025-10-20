@@ -11,6 +11,7 @@ export default withCORS(async (req, res) => {
   
   const COMPANY_PROPS = [
     'pakiet',
+    'pack_next_billing_date',
     'wpf_ostatnia_faktura',
     'swb_ostatnia_faktura',
     'budzet_ostatnia_faktura',
