@@ -63,8 +63,10 @@ async function handler(req, res) {
         properties: {
           closedate: foundDeal.properties.closedate || null,
           subscription_tier: foundDeal.properties.subscription_tier || null,
-          dealstage: foundDeal.properties.dealstage || null
-        }
+          dealstage: foundDeal.properties.dealstage || null,
+          rabat__pakiet_: foundDeal.properties.rabat__pakiet_ || null,
+          rabat__uznanie_: foundDeal.properties.rabat__uznanie_ || null
+         }
       }
     });
   } catch (e) {
