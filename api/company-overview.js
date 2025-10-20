@@ -67,6 +67,7 @@ export default withCORS(async (req, res) => {
       'name',
       'domain',
       'subscription_tier',
+      'pack_next_billing_date',
       'aktywne_produkty_glowne',
       'aktywne_uslugi_dodatkowe',
       'wpf_typ_licencji',
