@@ -27,7 +27,7 @@ async function handler(req, res) {
         ]
       }],
       sorts: [{ propertyName: 'hs_lastmodifieddate', direction: 'DESCENDING' }],
-      properties: ['dealname', 'pipeline', 'hubspot_owner_id', 'closedate', 'subscription_tier', 'dealstage'],
+      properties: ['dealname', 'pipeline', 'hubspot_owner_id', 'closedate', 'subscription_tier', 'dealstage', 'rabat__pakiet_', 'rabat__uznanie_'],
       limit: 1
     });
     
